@@ -133,10 +133,19 @@ namespace internal
             return stringName;
         }
 
-        // First look for translated string in current locale
+        // First look for translated string in current locale.
+        // Deliberately using contains()+at() (read-only traversal) rather than
+        // operator[](json_pointer) - that overload auto-creates missing path
+        // segments by mutating the object as it walks the pointer, and doing
+        // that on currentLocale/defaultLocale (which stay a default-constructed
+        // null json value whenever the current locale matches the default one,
+        // e.g. when the system language lookup fails and falls back to
+        // DEFAULT_LOCALE) crashes hard on this toolchain instead of throwing a
+        // catchable exception.
         try
         {
-            return currentLocale[pointer].get<std::string>();
+            if (currentLocale.contains(pointer))
+                return currentLocale.at(pointer).get<std::string>();
         }
         catch (...)
         {
@@ -145,7 +154,8 @@ namespace internal
         // Then look for default locale
         try
         {
-            return defaultLocale[pointer].get<std::string>();
+            if (defaultLocale.contains(pointer))
+                return defaultLocale.at(pointer).get<std::string>();
         }
         catch (...)
         {

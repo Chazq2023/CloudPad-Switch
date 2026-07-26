@@ -110,6 +110,7 @@ namespace
 
 CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string platform)
 {
+	CHIAKI_LOGI(log, "CloudGameList: ctor start, platform=%s", platform.c_str());
 	CloudCatalog catalog(log);
 	std::vector<CloudGame> games;
 	std::string error;
@@ -118,14 +119,19 @@ CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string pla
 	brls::Application::blockInputs();
 	if(platform == "ps5")
 	{
+		CHIAKI_LOGI(log, "CloudGameList: fetching ps5 catalog");
 		ok = catalog.FetchPs5CloudCatalog("en-US", &games, &error);
+		CHIAKI_LOGI(log, "CloudGameList: ps5 catalog fetch returned ok=%d", (int)ok);
 	}
 	else
 	{
 		std::string npsso = settings->GetNPSSO();
+		CHIAKI_LOGI(log, "CloudGameList: getting duid");
 		std::string duid = settings->GetOrCreateDUID();
+		CHIAKI_LOGI(log, "CloudGameList: fetching psnow catalog (npsso empty=%d)", (int)npsso.empty());
 		std::vector<CloudGame> all_games;
 		ok = catalog.FetchPsnowCatalog(npsso, duid, &all_games, &error);
+		CHIAKI_LOGI(log, "CloudGameList: psnow catalog fetch returned ok=%d", (int)ok);
 		if(ok)
 		{
 			for(const auto &g : all_games)
@@ -134,6 +140,7 @@ CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string pla
 		}
 	}
 	brls::Application::unblockInputs();
+	CHIAKI_LOGI(log, "CloudGameList: ctor building rows, ok=%d", (int)ok);
 
 	brls::ListItem *status = new brls::ListItem(platform == "ps5" ? "PS5 Cloud Catalog" : "PSNOW Catalog");
 	status->setValue(ok ? fmt::format("{} games", games.size()) : "Failed to load");

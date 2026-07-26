@@ -52,7 +52,14 @@ static void initNxLink()
 
 	s_nxlinkSock = nxlinkStdio();
 	if(s_nxlinkSock >= 0)
+	{
+		// stdout is a socket now, not a TTY, so libc defaults to full
+		// buffering - on a hard crash whatever's unflushed is lost. Force
+		// unbuffered so every line reaches the nxlink listener immediately,
+		// otherwise crash diagnostics over this link are unreliable.
+		setvbuf(stdout, NULL, _IONBF, 0);
 		printf("initNxLink\n");
+	}
 	else
 		socketExit();
 }
