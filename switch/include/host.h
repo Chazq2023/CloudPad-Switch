@@ -17,21 +17,11 @@
 #include "io.h"
 #include "settings.h"
 
-class DiscoveryManager;
-static void Discovery(ChiakiDiscoveryHost *, void *);
 static void InitAudioCB(int16_t *buf, size_t buf_size, void *user);
 static void HapticsFrameCb(unsigned int channels, unsigned int rate, void *user);
 static bool VideoCB(uint8_t *buf, size_t buf_size, void *user);
 static void AudioCB(int16_t *buf, size_t samples_count, void *user);
 static void EventCB(ChiakiEvent *event, void *user);
-static void RegistEventCB(ChiakiRegistEvent *event, void *user);
-
-enum RegistError
-{
-	HOST_REGISTER_OK,
-	HOST_REGISTER_ERROR_SETTING_PSNACCOUNTID,
-	HOST_REGISTER_ERROR_SETTING_PSNONLINEID
-};
 
 class Settings;
 
@@ -48,12 +38,6 @@ class Host
 		// user info
 		std::string psn_online_id = "";
 		std::string psn_account_id = "";
-		// info from regist/settings
-		ChiakiRegist regist = {};
-		ChiakiRegistInfo regist_info = {};
-		std::function<void()> chiaki_regist_event_type_finished_canceled = nullptr;
-		std::function<void()> chiaki_regist_event_type_finished_failed = nullptr;
-		std::function<void()> chiaki_regist_event_type_finished_success = nullptr;
 		std::function<void()> chiaki_event_connected_cb = nullptr;
 		std::function<void(bool)> chiaki_even_login_pin_request_cb = nullptr;
 		std::function<void(uint8_t, uint8_t)> chiaki_event_rumble_cb = nullptr;
@@ -90,23 +74,38 @@ class Host
 		ChiakiSession session;
 		ChiakiOpusDecoder opus_decoder;
 		ChiakiConnectVideoProfile video_profile;
+
+		// cloud (PSNOW/PSCLOUD) session state, set by SetCloudConnectInfo instead
+		// of the local discovery/registration fields above. cloud_launch_spec in
+		// particular must stay alive for the whole session (chiaki_session_init
+		// stores the pointer as-is, it does not copy it).
+		bool cloud_mode = false;
+		ChiakiServiceType cloud_service_type = CHIAKI_SERVICE_TYPE_REMOTE_PLAY;
+		std::string cloud_server_addr;
+		int cloud_server_port = 0;
+		std::string cloud_launch_spec;
+		std::string cloud_handshake_key_b64;
+		std::string cloud_session_id;
+		uint8_t cloud_psn_wrapper_type = 0;
+		uint32_t cloud_mtu_in = 0;
+		uint32_t cloud_mtu_out = 0;
+		uint64_t cloud_rtt_us = 0;
 		friend class Settings;
-		friend class DiscoveryManager;
-		// allows session to be passed to gui
-		friend class HostInterface;
-		friend class EnterPinView;
 
 	public:
 		Host(std::string host_name);
 		~Host();
-		int Register(int pin);
-		int Wakeup();
 		int InitSession(IO *);
 		int FiniSession();
+		// platform must be "ps3", "ps4", or "ps5" - selects the RP protocol
+		// variant (PS4-style vs PS5-style) the same way local ps5 sessions do.
+		void SetCloudConnectInfo(ChiakiServiceType service_type, std::string platform,
+			std::string server_addr, int server_port, std::string launch_spec,
+			std::string handshake_key_b64, std::string session_id, uint8_t psn_wrapper_type,
+			uint32_t mtu_in, uint32_t mtu_out, uint64_t rtt_us);
 		void StopSession();
 		void StartSession();
 		void SendFeedbackState();
-		void RegistCB(ChiakiRegistEvent *);
 		void ConnectionEventCB(ChiakiEvent *);
 		bool GetVideoResolution(int *ret_width, int *ret_height);
 		std::string GetHostName();
@@ -114,18 +113,11 @@ class Host
 		ChiakiTarget GetChiakiTarget();
 		void SetChiakiTarget(ChiakiTarget target);
 		void SetHostAddr(std::string host_addr);
-		void SetRegistEventTypeFinishedCanceled(std::function<void()> chiaki_regist_event_type_finished_canceled);
-		void SetRegistEventTypeFinishedFailed(std::function<void()> chiaki_regist_event_type_finished_failed);
-		void SetRegistEventTypeFinishedSuccess(std::function<void()> chiaki_regist_event_type_finished_success);
 		void SetEventConnectedCallback(std::function<void()> chiaki_event_connected_cb);
 		void SetEventLoginPinRequestCallback(std::function<void(bool)> chiaki_even_login_pin_request_cb);
 		void SetEventRumbleCallback(std::function<void(uint8_t, uint8_t)> chiaki_event_rumble_cb);
 		void SetEventQuitCallback(std::function<void(ChiakiQuitEvent *)> chiaki_event_quit_cb);
 		void SetReadControllerCallback(std::function<void(ChiakiControllerState *, std::map<uint32_t, int8_t> *)> io_read_controller_cb);
-		bool IsRegistered();
-		bool IsDiscovered();
-		bool IsReady();
-		bool HasRPkey();
 		bool IsPS5();
 		void PushHapticsFrame(uint8_t *buf, size_t buf_size);
 };

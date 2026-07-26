@@ -15,59 +15,28 @@
 
 #include <borealis.hpp>
 #include "cloudauth.h"
-#include "discoverymanager.h"
 #include "host.h"
 #include "io.h"
 #include "settings.h"
 #include "switch.h"
-#include "views/enter_pin_view.h"
-#include "views/ps_remote_play.h"
 #include "views/cloud_game_list.h"
-
-class HostInterface : public brls::List
-{
-	private:
-		IO *io;
-		Host *host;
-		Settings *settings;
-		ChiakiLog *log = nullptr;
-		bool connected = false;
-
-	public:
-		HostInterface(Host *host);
-		~HostInterface();
-
-		static void Register(Host *host, std::function<void()> success_cb = nullptr);
-		void Register();
-		void Wakeup(brls::View *view);
-		void Connect(brls::View *view);
-		void ConnectSession();
-		void Disconnect();
-		void Stream();
-		void EnterPin(bool isError);
-		void CloseStream(ChiakiQuitEvent *quit);
-};
 
 class MainApplication
 {
 	private:
 		Settings *settings;
 		ChiakiLog *log;
-		DiscoveryManager *discoverymanager;
 		IO *io;
 		brls::TabFrame *rootFrame;
-		std::map<Host *, HostInterface *> host_menuitems;
 		brls::ListItem *cloud_login_status = nullptr;
 
-		bool BuildConfigurationMenu(brls::List *, Host *host = nullptr);
-		void BuildAddHostConfigurationMenu(brls::List *);
 		void BuildAccountMenu(brls::List *);
 		void SignIn();
 		void SignOut();
 		void RefreshLoginStatus();
 
 	public:
-		MainApplication(DiscoveryManager *discoverymanager);
+		MainApplication();
 		~MainApplication();
 		bool Load();
 };

@@ -4,9 +4,6 @@
 #include <chiaki/discovery.h>
 #include <chiaki/log.h>
 
-// discover and wakeup ps4 host
-// from local network
-#include "discoverymanager.h"
 #include "gui.h"
 #include "io.h"
 #include "settings.h"
@@ -127,10 +124,9 @@ int main(int argc, char *argv[])
 	}
 
 	// build sdl OpenGl and AV decoders graphical interface
-	DiscoveryManager discoverymanager = DiscoveryManager();
 	{
 		// scope to delete MainApplication before SDL_Quit()
-		MainApplication app(&discoverymanager);
+		MainApplication app;
 		app.Load();
 	}
 

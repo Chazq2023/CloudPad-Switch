@@ -2,8 +2,6 @@
 
 #include <cstring>
 
-#include <chiaki/base64.h>
-
 #include "host.h"
 #include "io.h"
 
@@ -37,12 +35,6 @@ static void EventCB(ChiakiEvent *event, void *user)
 	host->ConnectionEventCB(event);
 }
 
-static void RegistEventCB(ChiakiRegistEvent *event, void *user)
-{
-	Host *host = (Host *)user;
-	host->RegistCB(event);
-}
-
 Host::Host(std::string host_name)
 	: host_name(host_name)
 {
@@ -52,92 +44,6 @@ Host::Host(std::string host_name)
 
 Host::~Host()
 {
-}
-
-int Host::Wakeup()
-{
-	if(strlen(this->rp_regist_key) > 8)
-	{
-		CHIAKI_LOGE(this->log, "Given registkey is too long");
-		return 1;
-	}
-	else if(strlen(this->rp_regist_key) <= 0)
-	{
-		CHIAKI_LOGE(this->log, "Given registkey is not defined");
-		return 2;
-	}
-
-	uint64_t credential = (uint64_t)strtoull(this->rp_regist_key, NULL, 16);
-	ChiakiErrorCode ret = chiaki_discovery_wakeup(this->log, NULL,
-		host_addr.c_str(), credential, this->IsPS5());
-
-	if(ret == CHIAKI_ERR_SUCCESS)
-	{
-		//FIXME
-	}
-	return ret;
-}
-
-int Host::Register(int pin)
-{
-	// use pin and accont_id to negociate secrets for session
-	//
-	std::string account_id = this->settings->GetPSNAccountID(this);
-	std::string online_id = this->settings->GetPSNOnlineID(this);
-	size_t account_id_size = sizeof(uint8_t[CHIAKI_PSN_ACCOUNT_ID_SIZE]);
-
-	regist_info.target = this->target;
-	regist_info.holepunch_info = NULL;
-	regist_info.rudp = NULL;
-
-	if(this->target >= CHIAKI_TARGET_PS4_9)
-	{
-		// use AccountID for ps4 > 7.0
-		if(account_id.length() > 0)
-		{
-			chiaki_base64_decode(account_id.c_str(), account_id.length(),
-				regist_info.psn_account_id, &(account_id_size));
-			regist_info.psn_online_id = nullptr;
-		}
-		else
-		{
-			CHIAKI_LOGE(this->log, "Undefined PSN Account ID (Please configure a valid psn_account_id)");
-			return HOST_REGISTER_ERROR_SETTING_PSNACCOUNTID;
-		}
-	}
-	else if(this->target > CHIAKI_TARGET_PS4_UNKNOWN)
-	{
-		// use oline ID for ps4 < 7.0
-		if(online_id.length() > 0)
-		{
-			regist_info.psn_online_id = this->psn_online_id.c_str();
-			// regist_info.psn_account_id = '\0';
-		}
-		else
-		{
-			CHIAKI_LOGE(this->log, "Undefined PSN Online ID (Please configure a valid psn_online_id)");
-			return HOST_REGISTER_ERROR_SETTING_PSNONLINEID;
-		}
-	}
-	else
-	{
-		CHIAKI_LOGE(this->log, "Undefined PS4 system version (please run discover first)");
-		throw Exception("Undefined PS4 system version (please run discover first)");
-	}
-
-	this->regist_info.pin = pin;
-	this->regist_info.host = this->host_addr.c_str();
-	this->regist_info.broadcast = false;
-
-	if(this->target >= CHIAKI_TARGET_PS4_9)
-		CHIAKI_LOGI(this->log, "Registering to host `%s` `%s` with PSN AccountID `%s` pin `%d`",
-			this->host_name.c_str(), this->host_addr.c_str(), account_id.c_str(), pin);
-	else
-		CHIAKI_LOGI(this->log, "Registering to host `%s` `%s` with PSN OnlineID `%s` pin `%d`",
-			this->host_name.c_str(), this->host_addr.c_str(), online_id.c_str(), pin);
-
-	chiaki_regist_start(&this->regist, this->log, &this->regist_info, RegistEventCB, this);
-	return HOST_REGISTER_OK;
 }
 
 int Host::InitSession(IO *user)
@@ -152,7 +58,6 @@ int Host::InitSession(IO *user)
 	haptics_sink.frame_cb = HapticsFrameCb;
 	ChiakiConnectInfo chiaki_connect_info = {};
 
-	chiaki_connect_info.host = this->host_addr.c_str();
 	chiaki_connect_info.video_profile = this->video_profile;
 	chiaki_connect_info.video_profile_auto_downgrade = true;
 	if (this->IsPS5()) {
@@ -169,6 +74,27 @@ int Host::InitSession(IO *user)
 
 	chiaki_connect_info.ps5 = this->IsPS5();
 
+	if(this->cloud_mode)
+	{
+		chiaki_connect_info.host = this->cloud_server_addr.c_str();
+		chiaki_connect_info.service_type = this->cloud_service_type;
+		chiaki_connect_info.cloud_launch_spec = this->cloud_launch_spec.c_str();
+		chiaki_connect_info.cloud_handshake_key = this->cloud_handshake_key_b64.c_str();
+		chiaki_connect_info.cloud_session_id = this->cloud_session_id.c_str();
+		chiaki_connect_info.cloud_port = (uint16_t)this->cloud_server_port;
+		chiaki_connect_info.cloud_psn_wrapper_type = this->cloud_psn_wrapper_type;
+		chiaki_connect_info.cloud_mtu_in = this->cloud_mtu_in;
+		chiaki_connect_info.cloud_mtu_out = this->cloud_mtu_out;
+		chiaki_connect_info.cloud_rtt_us = this->cloud_rtt_us;
+	}
+	else
+	{
+		chiaki_connect_info.host = this->host_addr.c_str();
+		chiaki_connect_info.service_type = CHIAKI_SERVICE_TYPE_REMOTE_PLAY;
+		memcpy(chiaki_connect_info.regist_key, this->rp_regist_key, sizeof(chiaki_connect_info.regist_key));
+		memcpy(chiaki_connect_info.morning, this->rp_key, sizeof(chiaki_connect_info.morning));
+	}
+
 	if(!user->InitAVCodec(this->IsPS5()))
 	{
 		throw Exception("Failed to initiate libav codec");
@@ -177,9 +103,6 @@ int Host::InitSession(IO *user)
 	{
 		throw Exception("Failed to initiate video");
 	}
-
-	memcpy(chiaki_connect_info.regist_key, this->rp_regist_key, sizeof(chiaki_connect_info.regist_key));
-	memcpy(chiaki_connect_info.morning, this->rp_key, sizeof(chiaki_connect_info.morning));
 
 	ChiakiErrorCode err = chiaki_session_init(&(this->session), &chiaki_connect_info, this->log);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -197,6 +120,28 @@ int Host::InitSession(IO *user)
 	chiaki_controller_state_set_idle(&this->controller_state);
 
 	return 0;
+}
+
+void Host::SetCloudConnectInfo(ChiakiServiceType service_type, std::string platform,
+	std::string server_addr, int server_port, std::string launch_spec,
+	std::string handshake_key_b64, std::string session_id, uint8_t psn_wrapper_type,
+	uint32_t mtu_in, uint32_t mtu_out, uint64_t rtt_us)
+{
+	this->cloud_mode = true;
+	this->cloud_service_type = service_type;
+	this->cloud_server_addr = server_addr;
+	this->cloud_server_port = server_port;
+	this->cloud_launch_spec = launch_spec;
+	this->cloud_handshake_key_b64 = handshake_key_b64;
+	this->cloud_session_id = session_id;
+	this->cloud_psn_wrapper_type = psn_wrapper_type;
+	this->cloud_mtu_in = mtu_in;
+	this->cloud_mtu_out = mtu_out;
+	this->cloud_rtt_us = rtt_us;
+
+	// Drives IsPS5() (and so the H265/ps5 branches InitSession already has for
+	// local sessions) the same way a locally discovered PS5 host would.
+	this->target = (platform == "ps5") ? CHIAKI_TARGET_PS5_1 : CHIAKI_TARGET_PS4_10;
 }
 
 int Host::FiniSession()
@@ -262,60 +207,6 @@ void Host::ConnectionEventCB(ChiakiEvent *event)
 	}
 }
 
-void Host::RegistCB(ChiakiRegistEvent *event)
-{
-	// Chiaki callback fuction
-	// fuction called by lib chiaki regist
-	// durring client pin code registration
-	//
-	// read data from lib and record secrets into Host object
-
-	this->registered = false;
-	switch(event->type)
-	{
-		case CHIAKI_REGIST_EVENT_TYPE_FINISHED_CANCELED:
-			CHIAKI_LOGI(this->log, "Register event CHIAKI_REGIST_EVENT_TYPE_FINISHED_CANCELED");
-			if(this->chiaki_regist_event_type_finished_canceled != nullptr)
-			{
-				this->chiaki_regist_event_type_finished_canceled();
-			}
-			break;
-		case CHIAKI_REGIST_EVENT_TYPE_FINISHED_FAILED:
-			CHIAKI_LOGI(this->log, "Register event CHIAKI_REGIST_EVENT_TYPE_FINISHED_FAILED");
-			if(this->chiaki_regist_event_type_finished_failed != nullptr)
-			{
-				this->chiaki_regist_event_type_finished_failed();
-			}
-			break;
-		case CHIAKI_REGIST_EVENT_TYPE_FINISHED_SUCCESS:
-		{
-			ChiakiRegisteredHost *r_host = event->registered_host;
-			CHIAKI_LOGI(this->log, "Register event CHIAKI_REGIST_EVENT_TYPE_FINISHED_SUCCESS");
-			// copy values form ChiakiRegisteredHost object
-			this->ap_ssid = r_host->ap_ssid;
-			this->ap_key = r_host->ap_key;
-			this->ap_name = r_host->ap_name;
-			memcpy(&(this->server_mac), &(r_host->server_mac), sizeof(this->server_mac));
-			this->server_nickname = r_host->server_nickname;
-			memcpy(&(this->rp_regist_key), &(r_host->rp_regist_key), sizeof(this->rp_regist_key));
-			this->rp_key_type = r_host->rp_key_type;
-			memcpy(&(this->rp_key), &(r_host->rp_key), sizeof(this->rp_key));
-			// mark host as registered
-			this->registered = true;
-			this->rp_key_data = true;
-			CHIAKI_LOGI(this->log, "Register Success %s", this->host_name.c_str());
-
-			if(this->chiaki_regist_event_type_finished_success != nullptr)
-				this->chiaki_regist_event_type_finished_success();
-
-			break;
-		}
-	}
-	// close registration socket
-	chiaki_regist_stop(&this->regist);
-	chiaki_regist_fini(&this->regist);
-}
-
 bool Host::GetVideoResolution(int *ret_width, int *ret_height)
 {
 	switch(this->video_resolution)
@@ -367,21 +258,6 @@ void Host::SetHostAddr(std::string host_addr)
 	this->host_addr = host_addr;
 }
 
-void Host::SetRegistEventTypeFinishedCanceled(std::function<void()> chiaki_regist_event_type_finished_canceled)
-{
-	this->chiaki_regist_event_type_finished_canceled = chiaki_regist_event_type_finished_canceled;
-}
-
-void Host::SetRegistEventTypeFinishedFailed(std::function<void()> chiaki_regist_event_type_finished_failed)
-{
-	this->chiaki_regist_event_type_finished_failed = chiaki_regist_event_type_finished_failed;
-}
-
-void Host::SetRegistEventTypeFinishedSuccess(std::function<void()> chiaki_regist_event_type_finished_success)
-{
-	this->chiaki_regist_event_type_finished_success = chiaki_regist_event_type_finished_success;
-}
-
 void Host::SetEventConnectedCallback(std::function<void()> chiaki_event_connected_cb)
 {
 	this->chiaki_event_connected_cb = chiaki_event_connected_cb;
@@ -405,26 +281,6 @@ void Host::SetEventRumbleCallback(std::function<void(uint8_t, uint8_t)> chiaki_e
 void Host::SetReadControllerCallback(std::function<void(ChiakiControllerState *, std::map<uint32_t, int8_t> *)> io_read_controller_cb)
 {
 	this->io_read_controller_cb = io_read_controller_cb;
-}
-
-bool Host::IsRegistered()
-{
-	return this->registered;
-}
-
-bool Host::IsDiscovered()
-{
-	return this->discovered;
-}
-
-bool Host::IsReady()
-{
-	return this->state == CHIAKI_DISCOVERY_HOST_STATE_READY;
-}
-
-bool Host::HasRPkey()
-{
-	return this->rp_key_data;
 }
 
 bool Host::IsPS5()
