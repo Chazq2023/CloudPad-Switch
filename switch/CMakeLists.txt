@@ -91,9 +91,11 @@ find_library(DAV1D dav1d)
 add_executable(chiaki-borealis WIN32
 	src/views/enter_pin_view.cpp
 	src/views/ps_remote_play.cpp
+	src/views/cloud_game_list.cpp
 	src/discoverymanager.cpp
 	src/settings.cpp
 	src/cloudauth.cpp
+	src/cloudcatalog.cpp
 	src/io.cpp
 	src/host.cpp
 	src/main.cpp

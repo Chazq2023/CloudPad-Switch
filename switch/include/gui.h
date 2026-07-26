@@ -22,6 +22,7 @@
 #include "switch.h"
 #include "views/enter_pin_view.h"
 #include "views/ps_remote_play.h"
+#include "views/cloud_game_list.h"
 
 class HostInterface : public brls::List
 {

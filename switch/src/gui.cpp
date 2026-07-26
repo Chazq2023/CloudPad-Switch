@@ -310,6 +310,11 @@ bool MainApplication::Load()
 	BuildAccountMenu(account);
 	this->rootFrame->addTab("Account", account);
 
+	this->rootFrame->addSeparator();
+	this->rootFrame->addTab("PS3", new CloudGameList(this->settings, this->log, "ps3"));
+	this->rootFrame->addTab("PS4", new CloudGameList(this->settings, this->log, "ps4"));
+	this->rootFrame->addTab("PS5", new CloudGameList(this->settings, this->log, "ps5"));
+
 	brls::Application::pushView(this->rootFrame);
 
 	while (brls::Application::mainLoop()) {
