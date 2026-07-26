@@ -43,6 +43,11 @@ class Settings
 		int64_t global_psn_token_expiry = 0; // unix epoch seconds, 0 = unknown/expired
 		std::string global_duid = "";
 
+		// Playback tuning (account-level, applies to every cloud stream)
+		int global_custom_bitrate_kbps = 0; // 0 = use the resolution preset's default
+		int global_sharpen_level = 0;       // 0=Off, 1..3=Low/Medium/High
+		bool global_video_pacing_smooth = false; // false=Standard, true=Smooth (see io.h)
+
 		typedef enum configurationitem
 		{
 			UNKNOWN,
@@ -62,6 +67,9 @@ class Settings
 			PSN_ID_TOKEN,
 			PSN_TOKEN_EXPIRY,
 			DUID,
+			CUSTOM_BITRATE_KBPS,
+			SHARPEN_LEVEL,
+			VIDEO_PACING_SMOOTH,
 		} ConfigurationItem;
 
 		// dummy parser implementation
@@ -84,6 +92,9 @@ class Settings
 			{PSN_ID_TOKEN, std::regex("^\\s*psn_id_token\\s*=\\s*\"?([\\w./=+-]+)\"?")},
 			{PSN_TOKEN_EXPIRY, std::regex("^\\s*psn_token_expiry\\s*=\\s*\"?(\\d+)\"?")},
 			{DUID, std::regex("^\\s*duid\\s*=\\s*\"?([\\w-]+)\"?")},
+			{CUSTOM_BITRATE_KBPS, std::regex("^\\s*custom_bitrate_kbps\\s*=\\s*\"?(\\d+)\"?")},
+			{SHARPEN_LEVEL, std::regex("^\\s*sharpen_level\\s*=\\s*\"?(\\d)\"?")},
+			{VIDEO_PACING_SMOOTH, std::regex("^\\s*video_pacing_smooth\\s*=\\s*\"?(0|1)\"?")},
 		};
 
 		ConfigurationItem ParseLine(std::string * line, std::string * value);
@@ -165,6 +176,19 @@ class Settings
 
 		bool IsCloudLoggedIn();
 		void ClearCloudLogin();
+
+		// Playback tuning
+		int GetCustomBitrateKbps(); // 0 = use the resolution preset's default bitrate
+		void SetCustomBitrateKbps(int kbps);
+		void SetCustomBitrateKbps(std::string kbps);
+
+		int GetSharpenLevel(); // 0=Off, 1..3=Low/Medium/High
+		void SetSharpenLevel(int level);
+		void SetSharpenLevel(std::string level);
+
+		bool GetVideoPacingSmooth();
+		void SetVideoPacingSmooth(bool smooth);
+		void SetVideoPacingSmooth(std::string value);
 };
 
 #endif // CHIAKI_SETTINGS_H

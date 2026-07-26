@@ -106,43 +106,97 @@ namespace
 
 		StartCloudStream(host);
 	}
+
+	// PSCLOUD (PS5) skips CloudKamaji entirely - game.entitlement_id already
+	// came straight from FetchOwnedPs5CloudGames's ownership cross-reference,
+	// which is the PS5 equivalent of what Kamaji's product-id conversion does
+	// for PSNOW (see cloudcatalog.h).
+	void StartPscloudGame(Settings *settings, ChiakiLog *log, const CloudGame &game)
+	{
+		if(game.entitlement_id.empty())
+		{
+			brls::Application::notify("This title is missing an entitlement id - try refreshing the PS5 library");
+			return;
+		}
+
+		std::string npsso = settings->GetNPSSO();
+		std::string duid = settings->GetOrCreateDUID();
+
+		brls::Application::blockInputs();
+		brls::Application::notify("Starting PS5 cloud stream...");
+
+		int resolution_height = settings->ResolutionPresetToInt(settings->GetVideoResolution(nullptr));
+		CloudGaikai gaikai(log, duid, "pscloud", "ps5", npsso, game.entitlement_id, resolution_height);
+		CloudGaikai::Result gaikai_result = gaikai.Run([](const std::string &message) {
+			brls::Application::notify(message);
+		});
+
+		if(!gaikai_result.success)
+		{
+			brls::Application::unblockInputs();
+			brls::Application::notify(fmt::format("Streaming setup failed: {}", gaikai_result.error));
+			return;
+		}
+
+		Host *host = new Host("Cloud: " + game.name);
+		host->SetCloudConnectInfo(CHIAKI_SERVICE_TYPE_PSCLOUD, "ps5",
+			gaikai_result.server_ip, gaikai_result.server_port, gaikai_result.launch_spec,
+			gaikai_result.handshake_key, gaikai_result.session_id, gaikai_result.psn_wrapper_type,
+			gaikai_result.mtu_in, gaikai_result.mtu_out, gaikai_result.rtt_us);
+
+		StartCloudStream(host);
+	}
 }
 
-CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string platform)
+CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string platform,
+	brls::TabFrame *root_frame, bool force_refresh)
+	: settings(settings), log(log), platform(platform), root_frame(root_frame)
 {
-	CHIAKI_LOGI(log, "CloudGameList: ctor start, platform=%s", platform.c_str());
 	CloudCatalog catalog(log);
 	std::vector<CloudGame> games;
 	std::string error;
 	bool ok;
+	bool needs_login = settings->GetNPSSO().empty();
 
-	brls::Application::blockInputs();
-	if(platform == "ps5")
+	// PS5's "Library" only ever lists titles this account owns (PS Plus
+	// Premium cloud streaming is per-title-owned, not subscription-wide like
+	// PSNOW), so unlike PSNOW there's nothing useful to show while signed
+	// out - matches upstream's Android showLoginRequiredState().
+	if(needs_login)
 	{
-		CHIAKI_LOGI(log, "CloudGameList: fetching ps5 catalog");
-		ok = catalog.FetchPs5CloudCatalog("en-US", &games, &error);
-		CHIAKI_LOGI(log, "CloudGameList: ps5 catalog fetch returned ok=%d", (int)ok);
+		ok = false;
+		error = "Sign in with PlayStation (Account tab) to see this library";
 	}
 	else
 	{
-		std::string npsso = settings->GetNPSSO();
-		CHIAKI_LOGI(log, "CloudGameList: getting duid");
-		std::string duid = settings->GetOrCreateDUID();
-		CHIAKI_LOGI(log, "CloudGameList: fetching psnow catalog (npsso empty=%d)", (int)npsso.empty());
-		std::vector<CloudGame> all_games;
-		ok = catalog.FetchPsnowCatalog(npsso, duid, &all_games, &error);
-		CHIAKI_LOGI(log, "CloudGameList: psnow catalog fetch returned ok=%d", (int)ok);
-		if(ok)
+		brls::Application::blockInputs();
+		if(platform == "ps5")
 		{
-			for(const auto &g : all_games)
-				if(g.platform == platform)
-					games.push_back(g);
+			ok = catalog.FetchOwnedPs5CloudGames(settings->GetNPSSO(), "en-US", &games, &error, force_refresh);
 		}
+		else
+		{
+			std::string npsso = settings->GetNPSSO();
+			std::string duid = settings->GetOrCreateDUID();
+			std::vector<CloudGame> all_games;
+			ok = catalog.FetchPsnowCatalog(npsso, duid, &all_games, &error, force_refresh);
+			if(ok)
+			{
+				for(const auto &g : all_games)
+					if(g.platform == platform)
+						games.push_back(g);
+			}
+		}
+		brls::Application::unblockInputs();
 	}
-	brls::Application::unblockInputs();
-	CHIAKI_LOGI(log, "CloudGameList: ctor building rows, ok=%d", (int)ok);
 
-	brls::ListItem *status = new brls::ListItem(platform == "ps5" ? "PS5 Cloud Catalog" : "PSNOW Catalog");
+	brls::ListItem *refresh_item = new brls::ListItem("Refresh catalog");
+	refresh_item->getClickEvent()->subscribe([this](brls::View *view) {
+		this->Refresh();
+	});
+	this->addView(refresh_item);
+
+	brls::ListItem *status = new brls::ListItem(platform == "ps5" ? "PS5 Library" : "PSNOW Catalog");
 	status->setValue(ok ? fmt::format("{} games", games.size()) : "Failed to load");
 	this->addView(status);
 
@@ -159,12 +213,8 @@ CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string pla
 		brls::ListItem *item = new brls::ListItem(game.name.empty() ? game.product_id : game.name);
 		if(platform == "ps5")
 		{
-			// PS5 cloud streaming needs an entitlement id from the owned-games
-			// cross-reference, which Phase 2 deliberately didn't port (see
-			// cloudcatalog.h) - the catalog's own id is a content id, not an
-			// entitlement id, so there's nothing valid to allocate a slot with yet.
-			item->getClickEvent()->subscribe([](brls::View *view) {
-				brls::Application::notify("PS5 cloud streaming needs entitlement lookup, which isn't wired up yet");
+			item->getClickEvent()->subscribe([settings, log, game](brls::View *view) {
+				StartPscloudGame(settings, log, game);
 			});
 		}
 		else
@@ -175,4 +225,28 @@ CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string pla
 		}
 		this->addView(item);
 	}
+}
+
+void CloudGameList::SetSidebarItem(brls::SidebarItem *item)
+{
+	this->sidebar_item = item;
+}
+
+void CloudGameList::Refresh()
+{
+	if(!this->sidebar_item || !this->root_frame)
+		return;
+
+	brls::Application::notify("Refreshing catalog...");
+
+	// Build a fresh replacement rather than mutating this list's own rows in
+	// place - Borealis's BoxLayout::removeView is documented as unsafe to use
+	// at runtime. TabFrame::switchToView's own tab-switching path already
+	// does the equivalent swap safely (removeView(1, false), i.e. without
+	// freeing), so retargeting the SidebarItem at a new view and asking the
+	// frame to switch to it reuses that same proven path instead of a new one.
+	CloudGameList *fresh = new CloudGameList(this->settings, this->log, this->platform, this->root_frame, true);
+	fresh->SetSidebarItem(this->sidebar_item);
+	this->sidebar_item->setAssociatedView(fresh);
+	this->root_frame->switchToView(fresh);
 }

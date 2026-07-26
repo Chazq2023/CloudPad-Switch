@@ -114,13 +114,14 @@ void CloudGaikai::BuildRequestGameSpec()
 	json_object_object_add(spec, "cloudEndpoint", json_object_new_string("https://cc.prod.gaikai.com"));
 	json_object_object_add(spec, "redirectUri", json_object_new_string(redirect_uri.c_str()));
 
+	// Settings only ever offers 720p or 1080p (see gui.cpp's BuildAccountMenu) -
+	// anything else defaults to 1080p rather than silently mismatching what
+	// chiaki_connect_video_profile_preset set up for the client-side decoder.
 	std::string resolution_setting;
 	int client_width, client_height;
 	switch(resolution_height)
 	{
 		case 720: resolution_setting = "720"; client_width = 1280; client_height = 720; break;
-		case 1440: resolution_setting = "1440"; client_width = 2560; client_height = 1440; break;
-		case 2160: resolution_setting = "2160"; client_width = 3840; client_height = 2160; break;
 		default: resolution_setting = "1080"; client_width = 1920; client_height = 1080; break;
 	}
 	json_object_object_add(spec, "resolutionSetting", json_object_new_string(resolution_setting.c_str()));

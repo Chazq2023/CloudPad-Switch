@@ -132,6 +132,7 @@ namespace
 			json_object *g = json_object_array_get_idx(games_obj, i);
 			CloudGame game;
 			game.product_id = JsonGetString(g, "product_id");
+			game.entitlement_id = JsonGetString(g, "entitlement_id");
 			game.name = JsonGetString(g, "name");
 			game.image_url = JsonGetString(g, "image_url");
 			game.platform = JsonGetString(g, "platform");
@@ -153,6 +154,7 @@ namespace
 		{
 			json_object *g = json_object_new_object();
 			json_object_object_add(g, "product_id", json_object_new_string(game.product_id.c_str()));
+			json_object_object_add(g, "entitlement_id", json_object_new_string(game.entitlement_id.c_str()));
 			json_object_object_add(g, "name", json_object_new_string(game.name.c_str()));
 			json_object_object_add(g, "image_url", json_object_new_string(game.image_url.c_str()));
 			json_object_object_add(g, "platform", json_object_new_string(game.platform.c_str()));
@@ -435,9 +437,9 @@ bool CloudCatalog::FetchPsnowCategoryGames(const std::string &jsessionid, const 
 }
 
 bool CloudCatalog::FetchPsnowCatalog(const std::string &npsso, const std::string &duid,
-	std::vector<CloudGame> *out_games, std::string *out_error)
+	std::vector<CloudGame> *out_games, std::string *out_error, bool force_refresh)
 {
-	if(ReadCache("psnow", out_games))
+	if(!force_refresh && ReadCache("psnow", out_games))
 	{
 		CHIAKI_LOGI(log, "CloudCatalog: using cached PSNOW catalog (%zu games)", out_games->size());
 		return true;
@@ -497,9 +499,9 @@ bool CloudCatalog::FetchPsnowCatalog(const std::string &npsso, const std::string
 }
 
 bool CloudCatalog::FetchPs5CloudCatalog(const std::string &locale,
-	std::vector<CloudGame> *out_games, std::string *out_error)
+	std::vector<CloudGame> *out_games, std::string *out_error, bool force_refresh)
 {
-	if(ReadCache("ps5cloud", out_games))
+	if(!force_refresh && ReadCache("ps5cloud", out_games))
 	{
 		CHIAKI_LOGI(log, "CloudCatalog: using cached PS5 cloud catalog (%zu games)", out_games->size());
 		return true;
@@ -554,7 +556,15 @@ bool CloudCatalog::FetchPs5CloudCatalog(const std::string &locale,
 				continue;
 
 			CloudGame game;
-			game.product_id = JsonGetString(g, "id");
+			// "productId" is the field FetchOwnedPs5CloudGames's cross-reference
+			// matches against (that's the literal key name upstream's own
+			// processCrossReferenceComplete() reads from this same catalog
+			// response) - "id"/"conceptId" are content ids, not product ids,
+			// and only useful as a last-resort display key if productId is
+			// somehow absent.
+			game.product_id = JsonGetString(g, "productId");
+			if(game.product_id.empty())
+				game.product_id = JsonGetString(g, "id");
 			if(game.product_id.empty())
 				game.product_id = JsonGetString(g, "conceptId");
 			game.name = JsonGetString(g, "name");
@@ -576,5 +586,216 @@ bool CloudCatalog::FetchPs5CloudCatalog(const std::string &locale,
 	WriteCache("ps5cloud", games);
 	*out_games = games;
 	CHIAKI_LOGI(log, "CloudCatalog: fetched PS5 cloud catalog (%zu games)", out_games->size());
+	return true;
+}
+
+bool CloudCatalog::FetchOwnedPs5EntitlementToken(const std::string &npsso,
+	std::string *out_token, std::string *out_error)
+{
+	std::string url = std::string(kAccountBase) + "/v1/oauth/authorize"
+		"?response_type=token"
+		"&scope=" + UrlEncode("kamaji:get_internal_entitlements user:account.attributes.validate") +
+		"&client_id=dc523cc2-b51b-4190-bff0-3397c06871b3"
+		"&redirect_uri=" + UrlEncode(kRedirectUri) +
+		"&service_entity=" + UrlEncode("urn:service-entity:psn") +
+		"&prompt=none";
+
+	std::vector<std::string> headers = {
+		"Cookie: npsso=" + npsso,
+		std::string("User-Agent: ") + kBrowserUserAgent,
+	};
+
+	HttpResponse resp;
+	if(!HttpRequest(url, "GET", headers, "", &resp, out_error))
+		return false;
+
+	if(resp.status != 302 || resp.redirect_url.empty())
+	{
+		*out_error = "OAuth request failed fetching owned PS5 games (HTTP " + std::to_string(resp.status) + ")";
+		return false;
+	}
+
+	// The token comes back in the URL fragment (#access_token=...), not the
+	// query string, but ExtractQueryParam already treats '#' as a boundary
+	// the same way it treats '&', so it works for both.
+	std::string token = ExtractQueryParam(resp.redirect_url, "access_token");
+	if(token.empty())
+	{
+		*out_error = "Could not extract access token for owned PS5 games lookup";
+		return false;
+	}
+
+	*out_token = token;
+	return true;
+}
+
+bool CloudCatalog::FetchOwnedPs5EntitlementsPage(const std::string &token, int start,
+	std::vector<CloudGame> *out_page, bool *out_has_more, std::string *out_error)
+{
+	const int page_size = 300;
+	std::string url = "https://commerce.api.np.km.playstation.net/commerce/api/v1/users/me/internal_entitlements"
+		"?fields=game_meta&entitlement_type=5&start=" + std::to_string(start) + "&size=" + std::to_string(page_size);
+
+	std::vector<std::string> headers = {
+		"Authorization: Bearer " + token,
+		"Accept: application/json",
+	};
+
+	HttpResponse resp;
+	if(!HttpRequest(url, "GET", headers, "", &resp, out_error))
+		return false;
+
+	if(resp.status == 401 || resp.status == 403)
+	{
+		*out_error = "Authentication failed fetching owned games (HTTP " + std::to_string(resp.status) + ")";
+		return false;
+	}
+	if(resp.status != 200)
+	{
+		*out_error = "Owned games request failed (HTTP " + std::to_string(resp.status) + ")";
+		return false;
+	}
+
+	json_object *root = json_tokener_parse(resp.body.c_str());
+	if(!root)
+	{
+		*out_error = "Invalid JSON from owned games response";
+		return false;
+	}
+
+	int count = 0;
+	json_object *entitlements = nullptr;
+	if(json_object_object_get_ex(root, "entitlements", &entitlements) && json_object_is_type(entitlements, json_type_array))
+	{
+		count = json_object_array_length(entitlements);
+		for(int i = 0; i < count; i++)
+		{
+			json_object *ent = json_object_array_get_idx(entitlements, i);
+
+			// Only PS5 game entitlements (package_type PSGD), currently active,
+			// excluding subscriptions/services (IP/SUB product id prefixes) -
+			// matches upstream's filterOwnedPs5Games exactly.
+			json_object *game_meta = nullptr;
+			if(!json_object_object_get_ex(ent, "game_meta", &game_meta))
+				continue;
+			if(JsonGetString(game_meta, "package_type") != "PSGD")
+				continue;
+
+			json_object *active_obj = nullptr;
+			bool active = json_object_object_get_ex(ent, "active_flag", &active_obj) && json_object_get_boolean(active_obj);
+			if(!active)
+				continue;
+
+			std::string product_id = JsonGetString(ent, "product_id");
+			if(product_id.rfind("IP", 0) == 0 || product_id.rfind("SUB", 0) == 0)
+				continue;
+
+			std::string entitlement_id = JsonGetString(ent, "id");
+			if(entitlement_id.empty())
+				continue;
+
+			CloudGame game;
+			game.product_id = product_id;
+			game.entitlement_id = entitlement_id;
+			game.name = JsonGetString(game_meta, "name");
+			game.image_url = JsonGetString(game_meta, "icon_url");
+			game.platform = "ps5";
+			game.service_type = "pscloud";
+			out_page->push_back(game);
+		}
+	}
+	json_object_put(root);
+
+	*out_has_more = (count >= page_size);
+	return true;
+}
+
+bool CloudCatalog::FetchOwnedPs5CloudGames(const std::string &npsso, const std::string &locale,
+	std::vector<CloudGame> *out_games, std::string *out_error, bool force_refresh)
+{
+	if(!force_refresh && ReadCache("ps5owned", out_games))
+	{
+		CHIAKI_LOGI(log, "CloudCatalog: using cached owned PS5 games (%zu games)", out_games->size());
+		return true;
+	}
+
+	if(npsso.empty())
+	{
+		*out_error = "Not signed in to PlayStation";
+		return false;
+	}
+
+	std::vector<CloudGame> catalog;
+	std::string catalog_error;
+	if(!FetchPs5CloudCatalog(locale, &catalog, &catalog_error, force_refresh))
+	{
+		*out_error = "Could not load PS5 cloud catalog: " + catalog_error;
+		return false;
+	}
+
+	std::string token;
+	if(!FetchOwnedPs5EntitlementToken(npsso, &token, out_error))
+		return false;
+
+	std::vector<CloudGame> owned;
+	int start = 0;
+	while(true)
+	{
+		std::vector<CloudGame> page;
+		bool has_more = false;
+		if(!FetchOwnedPs5EntitlementsPage(token, start, &page, &has_more, out_error))
+			return false;
+		owned.insert(owned.end(), page.begin(), page.end());
+		if(!has_more)
+			break;
+		start += 300;
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+
+	// Cross-reference: an owned title only counts if it's also in the public
+	// streaming catalog (i.e. Sony's cloud infrastructure can actually stream
+	// it) - matches upstream's processCrossReferenceComplete, including its
+	// product-id-then-entitlement-id fallback match order.
+	std::vector<CloudGame> matched;
+	for(const auto &owned_game : owned)
+	{
+		const CloudGame *catalog_match = nullptr;
+		for(const auto &c : catalog)
+		{
+			if(c.product_id == owned_game.product_id)
+			{
+				catalog_match = &c;
+				break;
+			}
+		}
+		if(!catalog_match)
+		{
+			for(const auto &c : catalog)
+			{
+				if(c.product_id == owned_game.entitlement_id)
+				{
+					catalog_match = &c;
+					break;
+				}
+			}
+		}
+		if(!catalog_match)
+			continue;
+
+		CloudGame game = owned_game;
+		if(game.image_url.empty())
+			game.image_url = catalog_match->image_url;
+		matched.push_back(game);
+	}
+
+	if(matched.empty())
+	{
+		*out_error = "No owned PS5 titles matched the cloud streaming catalog";
+		return false;
+	}
+
+	WriteCache("ps5owned", matched);
+	*out_games = matched;
+	CHIAKI_LOGI(log, "CloudCatalog: cross-referenced owned PS5 games, %zu playable", out_games->size());
 	return true;
 }

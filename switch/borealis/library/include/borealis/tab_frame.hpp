@@ -38,13 +38,22 @@ class TabFrame : public AppletFrame
      * All tabs and separators must be added
      * before the TabFrame is itself added to
      * the view hierarchy
+     *
+     * Returns the SidebarItem backing this tab, so callers can later swap
+     * in a freshly-built replacement view for it (via
+     * SidebarItem::setAssociatedView + TabFrame::switchToView) without
+     * touching BoxLayout::removeView, which isn't safe to use at runtime.
      */
-    void addTab(std::string label, View* view);
+    SidebarItem* addTab(std::string label, View* view);
     void addSeparator();
 
     View* getDefaultFocus() override;
 
     virtual bool onCancel() override;
+
+    // Public so a tab's own content can request switching to a replacement
+    // view for itself (see addTab's doc comment above).
+    void switchToView(View* view);
 
     ~TabFrame();
 
@@ -52,8 +61,6 @@ class TabFrame : public AppletFrame
     Sidebar* sidebar;
     BoxLayout* layout;
     View* rightPane = nullptr;
-
-    void switchToView(View* view);
 };
 
 } // namespace brls

@@ -33,17 +33,33 @@ void main()
 }
 )glsl";
 
+// Both fragment shaders take an unsharp-mask term on the luma (Y) plane only,
+// before YUV->RGB conversion - sharpening luma alone avoids the color
+// fringing a naive RGB-space unsharp mask would introduce. u_sharpen is 0 by
+// default (identical output to before sharpening existed); IO::SetSharpenLevel
+// maps Settings::GetSharpenLevel() (0..3) to a strength here.
 static const char *yuv420p_shader_frag_glsl = R"glsl(
 #version 150 core
 uniform sampler2D plane1; // Y
 uniform sampler2D plane2; // U
 uniform sampler2D plane3; // V
+uniform vec2 u_texel_size; // 1/width, 1/height of plane1
+uniform float u_sharpen;   // 0 = off
 in vec2 uv_var;
 out vec4 out_color;
 void main()
 {
+	float y_c = texture(plane1, uv_var).r;
+	if(u_sharpen > 0.0)
+	{
+		float y_u = texture(plane1, uv_var - vec2(0.0, u_texel_size.y)).r;
+		float y_d = texture(plane1, uv_var + vec2(0.0, u_texel_size.y)).r;
+		float y_l = texture(plane1, uv_var - vec2(u_texel_size.x, 0.0)).r;
+		float y_r = texture(plane1, uv_var + vec2(u_texel_size.x, 0.0)).r;
+		y_c = y_c + u_sharpen * (4.0 * y_c - y_u - y_d - y_l - y_r);
+	}
 	vec3 yuv = vec3(
-		(texture(plane1, uv_var).r - (16.0 / 255.0)) / ((235.0 - 16.0) / 255.0),
+		(y_c - (16.0 / 255.0)) / ((235.0 - 16.0) / 255.0),
 		(texture(plane2, uv_var).r - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5,
 		(texture(plane3, uv_var).r - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5);
 	vec3 rgb = mat3(
@@ -59,6 +75,8 @@ static const char *nv12_shader_frag_glsl = R"glsl(
 
 uniform sampler2D plane1; // Y
 uniform sampler2D plane2; // interlaced UV
+uniform vec2 u_texel_size; // 1/width, 1/height of plane1
+uniform float u_sharpen;   // 0 = off
 
 in vec2 uv_var;
 
@@ -66,8 +84,17 @@ out vec4 out_color;
 
 void main()
 {
+	float y_c = texture(plane1, uv_var).r;
+	if(u_sharpen > 0.0)
+	{
+		float y_u = texture(plane1, uv_var - vec2(0.0, u_texel_size.y)).r;
+		float y_d = texture(plane1, uv_var + vec2(0.0, u_texel_size.y)).r;
+		float y_l = texture(plane1, uv_var - vec2(u_texel_size.x, 0.0)).r;
+		float y_r = texture(plane1, uv_var + vec2(u_texel_size.x, 0.0)).r;
+		y_c = y_c + u_sharpen * (4.0 * y_c - y_u - y_d - y_l - y_r);
+	}
 	vec3 yuv = vec3(
-		(texture(plane1, uv_var).r - (16.0 / 255.0)) / ((235.0 - 16.0) / 255.0),
+		(y_c - (16.0 / 255.0)) / ((235.0 - 16.0) / 255.0),
 		(texture(plane2, uv_var).r - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5,
 		(texture(plane2, uv_var).g - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5
 	);
@@ -261,6 +288,33 @@ send_packet:
 	} else {
 		current_frame = next_frame;
 		next_frame = (next_frame + 1) % MAX_FRAME_COUNT;
+
+		// Cadence detection for Smooth pacing (see io.h): ~16ms gaps between
+		// decoded frames mean a 60fps-like source (present every draw tick),
+		// ~33ms mean 30fps-like (present every other tick). A streak of 8
+		// debounces one-off scheduling jitter so a single late/early frame
+		// doesn't flip the period. Cheap enough to always run, even in
+		// Standard mode where nothing reads pacing_source_refresh_period.
+		uint64_t decoded_at_ms = SDL_GetTicks64();
+		if(this->pacing_last_decode_ms)
+		{
+			uint64_t gap = decoded_at_ms - this->pacing_last_decode_ms;
+			if(gap < 25)
+			{
+				this->pacing_fast_streak++;
+				this->pacing_slow_streak = 0;
+				if(this->pacing_fast_streak >= 8)
+					this->pacing_source_refresh_period = 1;
+			}
+			else if(gap < 55)
+			{
+				this->pacing_slow_streak++;
+				this->pacing_fast_streak = 0;
+				if(this->pacing_slow_streak >= 8)
+					this->pacing_source_refresh_period = 2;
+			}
+		}
+		this->pacing_last_decode_ms = decoded_at_ms;
 	}
 
 	av_packet_free(&packet);
@@ -1054,12 +1108,19 @@ bool IO::InitOpenGlShader()
 	D(glDeleteShader(this->vert));
 	D(glDeleteShader(this->frag));
 
+	D(this->sharpen_uniform = glGetUniformLocation(this->prog, "u_sharpen"));
+	D(this->texel_size_uniform = glGetUniformLocation(this->prog, "u_texel_size"));
+
 	return true;
 }
 
 inline void IO::SetOpenGlYUVPixels(AVFrame *frame)
 {
 	D(glUseProgram(this->prog));
+	if(this->texel_size_uniform >= 0)
+		D(glUniform2f(this->texel_size_uniform, 1.0f / frame->width, 1.0f / frame->height));
+	if(this->sharpen_uniform >= 0)
+		D(glUniform1f(this->sharpen_uniform, this->sharpen_amount));
 
 	int planes[][3] = {
 		// { width_divide, height_divider, data_per_pixel }
@@ -1111,6 +1172,10 @@ inline void IO::SetOpenGlYUVPixels(AVFrame *frame)
 inline void IO::SetOpenGlNV12Pixels(AVFrame *frame)
 {
 	D(glUseProgram(this->prog));
+	if(this->texel_size_uniform >= 0)
+		D(glUniform2f(this->texel_size_uniform, 1.0f / frame->width, 1.0f / frame->height));
+	if(this->sharpen_uniform >= 0)
+		D(glUniform1f(this->sharpen_uniform, this->sharpen_amount));
 
 	int planes[][5] = {
 		// { width_divide, height_divider, data_per_pixel }
@@ -1143,11 +1208,31 @@ inline void IO::OpenGlDraw()
 {
 	glClear(GL_COLOR_BUFFER_BIT);
 
-	if (enableHWAccl) {
-		SetOpenGlNV12Pixels(this->frames[current_frame]);
-	} else {
-		// send to OpenGl
-		SetOpenGlYUVPixels(this->frames[current_frame]);
+	// Standard pacing (default): re-upload the newest decoded frame every
+	// draw tick, same as before pacing existed. Smooth: only re-upload on the
+	// tick matching the detected source cadence (pacing_source_refresh_period,
+	// updated in VideoCB) - skipping the upload the rest of the time leaves
+	// the already-bound textures holding their previously uploaded pixels, so
+	// glDrawArrays below just redraws the same image, which is the "hold the
+	// frame" behavior smooth pacing wants without needing a separate frame
+	// queue (unlike green-nx's AVFrame-queue-based version - see io.h).
+	bool due = true;
+	if(this->video_pacing_smooth)
+	{
+		this->pacing_phase++;
+		due = this->pacing_phase >= this->pacing_source_refresh_period;
+		if(due)
+			this->pacing_phase = 0;
+	}
+
+	if(due)
+	{
+		if (enableHWAccl) {
+			SetOpenGlNV12Pixels(this->frames[current_frame]);
+		} else {
+			// send to OpenGl
+			SetOpenGlYUVPixels(this->frames[current_frame]);
+		}
 	}
 
 	//avcodec_flush_buffers(this->codec_context);
@@ -1261,4 +1346,21 @@ bool IO::MainLoop()
 	OpenGlDraw();
 
 	return !this->quit;
+}
+
+void IO::SetSharpenLevel(int level)
+{
+	// 0.15 per level keeps High (0.45) visibly sharper without haloing badly
+	// on the Switch's own 720p/1080p panel scaling.
+	this->sharpen_amount = 0.15f * (float)level;
+}
+
+void IO::SetVideoPacing(bool smooth)
+{
+	this->video_pacing_smooth = smooth;
+	this->pacing_phase = 0;
+	this->pacing_source_refresh_period = 1;
+	this->pacing_fast_streak = 0;
+	this->pacing_slow_streak = 0;
+	this->pacing_last_decode_ms = 0;
 }

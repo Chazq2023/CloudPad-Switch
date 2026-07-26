@@ -92,6 +92,27 @@ class IO
 		GLuint vert;
 		GLuint frag;
 		GLuint prog;
+		GLint sharpen_uniform = -1;
+		GLint texel_size_uniform = -1;
+		float sharpen_amount = 0.0f; // 0=Off, matches shader's u_sharpen
+
+		// "Standard" vs "Smooth" video pacing (see IO::SetVideoPacing). Standard
+		// re-uploads and presents the newest decoded frame every draw tick
+		// (lowest latency, arrival jitter shows as motion hitches). Smooth
+		// detects the source's 30/60fps cadence from decode arrival spacing and
+		// only re-uploads on the matching tick, holding the previous texture
+		// content (a plain skip - no re-upload call - since the GPU texture
+		// already retains its last-uploaded pixels) in between, trading a bit
+		// of latency for steadier motion. Adapted from the Steady/Smooth
+		// pacing modes in rmrf404/green-nx's Switch deko3d renderer, simplified
+		// to fit this app's texture-upload-per-draw pipeline instead of its
+		// AVFrame-queue-based one.
+		bool video_pacing_smooth = false;
+		uint32_t pacing_source_refresh_period = 1; // 1=60fps-like, 2=30fps-like
+		uint32_t pacing_fast_streak = 0;
+		uint32_t pacing_slow_streak = 0;
+		uint64_t pacing_last_decode_ms = 0;
+		uint32_t pacing_phase = 0;
 		bool InitOpenGl();
 		bool InitOpenGlTextures();
 		bool InitOpenGlTX1Textures();
@@ -132,6 +153,11 @@ class IO
 		void SetHapticRumble(uint8_t left, uint8_t right);
 		void HapticCB(uint8_t *buf, size_t buf_size);
 		void CleanUpHaptic();
+
+		// level: 0=Off, 1..3=Low/Medium/High (see Settings::GetSharpenLevel).
+		void SetSharpenLevel(int level);
+		// See video_pacing_smooth above.
+		void SetVideoPacing(bool smooth);
 };
 
 #endif //CHIAKI_IO_H

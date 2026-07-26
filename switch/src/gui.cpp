@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
 
 #include <ctime>
+#include <utility>
 
 #include "gui.h"
 #include <chiaki/log.h>
@@ -60,9 +61,15 @@ bool MainApplication::Load()
 
 	this->rootFrame->addSeparator();
 	brls::Logger::info("Building cloud catalog tabs");
-	this->rootFrame->addTab("PS3", new CloudGameList(this->settings, this->log, "ps3"));
-	this->rootFrame->addTab("PS4", new CloudGameList(this->settings, this->log, "ps4"));
-	this->rootFrame->addTab("PS5", new CloudGameList(this->settings, this->log, "ps5"));
+	const std::pair<std::string, std::string> cloud_tabs[] = {
+		{ "PS3", "ps3" }, { "PS4", "ps4" }, { "PS5", "ps5" }
+	};
+	for(const auto &tab : cloud_tabs)
+	{
+		CloudGameList *list = new CloudGameList(this->settings, this->log, tab.second, this->rootFrame);
+		brls::SidebarItem *item = this->rootFrame->addTab(tab.first, list);
+		list->SetSidebarItem(item);
+	}
 	brls::Logger::info("Cloud catalog tabs built");
 
 	brls::Application::pushView(this->rootFrame);
@@ -106,43 +113,24 @@ void MainApplication::BuildAccountMenu(brls::List *ls)
 	ls->addView(stream_info);
 
 	int value;
+	// Only 720p and 1080p are offered - 540p/360p aren't useful for cloud
+	// streaming and dropping them also removes the resolution/bitrate spec
+	// mismatch CloudGaikai used to have for them (see its BuildRequestGameSpec).
+	// Selecting either one now genuinely renders at that resolution end to
+	// end: chiaki_connect_video_profile_preset (lib/src/session.c) already
+	// mapped 1080p to a real 1920x1080 client decode profile, and
+	// CloudGaikai's request spec now matches it exactly instead of defaulting
+	// everything but 720p to 1080p.
 	ChiakiVideoResolutionPreset resolution_preset = this->settings->GetVideoResolution(nullptr);
-	switch(resolution_preset)
-	{
-		case CHIAKI_VIDEO_RESOLUTION_PRESET_1080p:
-			value = 0;
-			break;
-		case CHIAKI_VIDEO_RESOLUTION_PRESET_720p:
-			value = 1;
-			break;
-		case CHIAKI_VIDEO_RESOLUTION_PRESET_540p:
-			value = 2;
-			break;
-		case CHIAKI_VIDEO_RESOLUTION_PRESET_360p:
-			value = 3;
-			break;
-	}
+	value = (resolution_preset == CHIAKI_VIDEO_RESOLUTION_PRESET_720p) ? 1 : 0;
 
 	brls::SelectListItem *resolution = new brls::SelectListItem(
-		"Resolution", { "1080p (PS5 and PS4 Pro only)", "720p", "540p", "360p" }, value);
+		"Resolution", { "1080p", "720p" }, value);
 
 	auto resolution_cb = [this](int result) {
-		ChiakiVideoResolutionPreset value = CHIAKI_VIDEO_RESOLUTION_PRESET_720p;
-		switch(result)
-		{
-			case 0:
-				value = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
-				break;
-			case 1:
-				value = CHIAKI_VIDEO_RESOLUTION_PRESET_720p;
-				break;
-			case 2:
-				value = CHIAKI_VIDEO_RESOLUTION_PRESET_540p;
-				break;
-			case 3:
-				value = CHIAKI_VIDEO_RESOLUTION_PRESET_360p;
-				break;
-		}
+		ChiakiVideoResolutionPreset value = result == 1
+			? CHIAKI_VIDEO_RESOLUTION_PRESET_720p
+			: CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 		this->settings->SetVideoResolution(nullptr, value);
 		this->settings->WriteFile();
 	};
@@ -203,6 +191,44 @@ void MainApplication::BuildAccountMenu(brls::List *ls)
 	};
 	haptic->getValueSelectedEvent()->subscribe(haptic_cb);
 	ls->addView(haptic);
+
+	// 0 = use the resolution preset's own default bitrate (10/15 Mbps for
+	// 720p/1080p respectively, set by chiaki_connect_video_profile_preset).
+	static const int kBitrateChoicesKbps[] = { 0, 5000, 8000, 10000, 15000, 20000, 25000 };
+	int bitrate_kbps = this->settings->GetCustomBitrateKbps();
+	int bitrate_index = 0;
+	for(size_t i = 0; i < sizeof(kBitrateChoicesKbps) / sizeof(int); i++)
+		if(kBitrateChoicesKbps[i] == bitrate_kbps)
+			bitrate_index = (int)i;
+
+	brls::SelectListItem *bitrate = new brls::SelectListItem("Bitrate",
+		{ "Auto (resolution default)", "5 Mbps", "8 Mbps", "10 Mbps", "15 Mbps", "20 Mbps", "25 Mbps" },
+		bitrate_index);
+	auto bitrate_cb = [this](int result) {
+		this->settings->SetCustomBitrateKbps(kBitrateChoicesKbps[result]);
+		this->settings->WriteFile();
+	};
+	bitrate->getValueSelectedEvent()->subscribe(bitrate_cb);
+	ls->addView(bitrate);
+
+	brls::SelectListItem *sharpen = new brls::SelectListItem("Image sharpening",
+		{ "Off", "Low", "Medium", "High" }, this->settings->GetSharpenLevel());
+	auto sharpen_cb = [this](int result) {
+		this->settings->SetSharpenLevel(result);
+		this->settings->WriteFile();
+	};
+	sharpen->getValueSelectedEvent()->subscribe(sharpen_cb);
+	ls->addView(sharpen);
+
+	brls::SelectListItem *pacing = new brls::SelectListItem("Video pacing",
+		{ "Standard (lowest latency)", "Smooth (steadier motion)" },
+		this->settings->GetVideoPacingSmooth() ? 1 : 0);
+	auto pacing_cb = [this](int result) {
+		this->settings->SetVideoPacingSmooth(result == 1);
+		this->settings->WriteFile();
+	};
+	pacing->getValueSelectedEvent()->subscribe(pacing_cb);
+	ls->addView(pacing);
 
 	this->RefreshLoginStatus();
 }

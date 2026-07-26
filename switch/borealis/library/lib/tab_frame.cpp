@@ -69,7 +69,7 @@ void TabFrame::switchToView(View* view)
         this->layout->addView(this->rightPane, true, true); // addView() calls willAppear()
 }
 
-void TabFrame::addTab(std::string label, View* view)
+SidebarItem* TabFrame::addTab(std::string label, View* view)
 {
     SidebarItem* item = this->sidebar->addItem(label, view);
     item->getFocusEvent()->subscribe([this](View* view) {
@@ -83,6 +83,8 @@ void TabFrame::addTab(std::string label, View* view)
         Logger::debug("Switching to the first tab");
         this->switchToView(view);
     }
+
+    return item;
 }
 
 void TabFrame::addSeparator()

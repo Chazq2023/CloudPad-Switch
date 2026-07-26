@@ -179,6 +179,15 @@ void Settings::ParseFile()
 				case DUID:
 					this->global_duid = value;
 					break;
+				case CUSTOM_BITRATE_KBPS:
+					this->SetCustomBitrateKbps(value);
+					break;
+				case SHARPEN_LEVEL:
+					this->SetSharpenLevel(value);
+					break;
+				case VIDEO_PACING_SMOOTH:
+					this->SetVideoPacingSmooth(value);
+					break;
 			} // ci switch
 			if(rp_key_b && rp_regist_key_b && rp_key_type_b)
 				// the current host contains rp key data
@@ -238,6 +247,14 @@ int Settings::WriteFile()
 
 		if(this->global_duid.length())
 			config_file << "duid = \"" << this->global_duid << "\"\n";
+
+		if(this->global_custom_bitrate_kbps)
+			config_file << "custom_bitrate_kbps = " << std::to_string(this->global_custom_bitrate_kbps) << "\n";
+
+		if(this->global_sharpen_level)
+			config_file << "sharpen_level = " << std::to_string(this->global_sharpen_level) << "\n";
+
+		config_file << "video_pacing_smooth = " << (this->global_video_pacing_smooth ? "1" : "0") << "\n";
 
 		// write host config in file
 		// loop over all configured
@@ -716,6 +733,55 @@ void Settings::ClearCloudLogin()
 	this->global_psn_id_token = "";
 	this->global_psn_token_expiry = 0;
 	// keep global_duid: it identifies this device, not this login session
+}
+
+int Settings::GetCustomBitrateKbps()
+{
+	return this->global_custom_bitrate_kbps;
+}
+
+void Settings::SetCustomBitrateKbps(int kbps)
+{
+	this->global_custom_bitrate_kbps = kbps > 0 ? kbps : 0;
+}
+
+void Settings::SetCustomBitrateKbps(std::string kbps)
+{
+	this->SetCustomBitrateKbps(std::atoi(kbps.c_str()));
+}
+
+int Settings::GetSharpenLevel()
+{
+	return this->global_sharpen_level;
+}
+
+void Settings::SetSharpenLevel(int level)
+{
+	if(level < 0)
+		level = 0;
+	if(level > 3)
+		level = 3;
+	this->global_sharpen_level = level;
+}
+
+void Settings::SetSharpenLevel(std::string level)
+{
+	this->SetSharpenLevel(std::atoi(level.c_str()));
+}
+
+bool Settings::GetVideoPacingSmooth()
+{
+	return this->global_video_pacing_smooth;
+}
+
+void Settings::SetVideoPacingSmooth(bool smooth)
+{
+	this->global_video_pacing_smooth = smooth;
+}
+
+void Settings::SetVideoPacingSmooth(std::string value)
+{
+	this->SetVideoPacingSmooth(value == "1");
 }
 
 #ifdef CHIAKI_ENABLE_SWITCH_OVERCLOCK

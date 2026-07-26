@@ -137,14 +137,22 @@ bool CloudKamaji::Step0_5d_ConvertProductId(std::string *out_error)
 	if(!HttpRequest(url, "GET", headers, "", &resp, out_error))
 		return false;
 
-	if(resp.status == 404)
-	{
-		*out_error = "Game not found: product id '" + product_id + "' is not available for cloud streaming";
-		return false;
-	}
 	if(resp.status != 200)
 	{
-		*out_error = "Failed to look up product id '" + product_id + "' (HTTP " + std::to_string(resp.status) + ")";
+		// Temporary diagnostics: this endpoint 404s for at least some real
+		// PSNOW catalog product ids, and it's not yet clear whether that's a
+		// locale mismatch (country/language above are hardcoded to US/en
+		// rather than the account's real locale), a PS3-specific id-namespace
+		// issue, or something else - log the exact request and Sony's raw
+		// response body so the next real attempt shows what's actually wrong
+		// instead of guessing.
+		CHIAKI_LOGE(log, "CloudKamaji: container lookup failed (HTTP %ld) url=%s body=%s",
+			resp.status, url.c_str(), resp.body.c_str());
+
+		if(resp.status == 404)
+			*out_error = "Game not found: product id '" + product_id + "' is not available for cloud streaming";
+		else
+			*out_error = "Failed to look up product id '" + product_id + "' (HTTP " + std::to_string(resp.status) + ")";
 		return false;
 	}
 

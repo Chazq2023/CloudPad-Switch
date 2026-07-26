@@ -50,6 +50,14 @@ int Host::InitSession(IO *user)
 {
 	chiaki_connect_video_profile_preset(&(this->video_profile),
 		this->video_resolution, this->video_fps);
+	// Override the resolution preset's default bitrate if the user picked a
+	// custom one (Account tab). 0 means "use the preset's default" (10/15
+	// Mbps for 720p/1080p, set by chiaki_connect_video_profile_preset above).
+	int custom_bitrate_kbps = this->settings->GetCustomBitrateKbps();
+	if(custom_bitrate_kbps > 0)
+		this->video_profile.bitrate = custom_bitrate_kbps;
+	user->SetSharpenLevel(this->settings->GetSharpenLevel());
+	user->SetVideoPacing(this->settings->GetVideoPacingSmooth());
 	// Build chiaki ps4 stream session
 	chiaki_opus_decoder_init(&(this->opus_decoder), this->log);
 	ChiakiAudioSink audio_sink;
