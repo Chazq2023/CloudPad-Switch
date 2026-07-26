@@ -31,8 +31,15 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	.tcp_tx_buf_max_size = 0x40000,
 	.tcp_rx_buf_max_size = 0x40000,
 
+	// Takion (lib/src/takion.c, TAKION_A_RWND) always requests a 4MB
+	// SO_RCVBUF on its UDP socket - libnx's UDP buffers are a fixed size (no
+	// "max" growth field like TCP has), so udp_rx_buf_size has to be at least
+	// that big or the setsockopt call fails outright with ENOBUFS ("No buffer
+	// space available") the moment a stream actually tries to connect. This
+	// was never caught before because nothing in this app's history had
+	// reached an actual Takion connection attempt on real hardware yet.
 	.udp_tx_buf_size = 0x40000,
-	.udp_rx_buf_size = 0x40000,
+	.udp_rx_buf_size = 0x500000, // 5MB: 4MB required + headroom
 
 	.sb_efficiency = 8,
 

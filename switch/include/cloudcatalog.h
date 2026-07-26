@@ -58,14 +58,17 @@ class CloudCatalog
 		bool FetchPs5CloudCatalog(const std::string &locale,
 			std::vector<CloudGame> *out_games, std::string *out_error, bool force_refresh = false);
 
-		// Fetches the PS5 titles this signed-in account actually owns and
-		// cross-references them against FetchPs5CloudCatalog, matching upstream
-		// CloudCatalogBackend::getOwnedPs5CloudGames - this is what CloudPad's
-		// Android "PS5 Library" tab shows, and it's the only place a real
-		// entitlement_id (CloudGame::entitlement_id) comes from, so it's the
-		// PS5 equivalent of FetchPsnowCatalog for actually starting a stream.
-		// Requires a signed-in npsso. Blocking network call (OAuth + paginated
-		// entitlements fetch + catalog fetch/cross-reference).
+		// Fetches the PS5 titles this signed-in account actually owns, built
+		// directly from the account's own entitlements - matches upstream
+		// Android's PsCloudOwnership.filterOwnedPs5Games +
+		// buildOwnedGamesFromEntitlements exactly (no public-catalog
+		// membership requirement; FetchPs5CloudCatalog is only consulted
+		// afterwards, best-effort, to upgrade box art). This is what
+		// CloudPad's Android "PS5 Library" tab shows, and it's the only place
+		// a real entitlement_id (CloudGame::entitlement_id) comes from, so
+		// it's the PS5 equivalent of FetchPsnowCatalog for actually starting
+		// a stream. Requires a signed-in npsso. Blocking network call (OAuth
+		// + paginated entitlements fetch + best-effort catalog art fetch).
 		bool FetchOwnedPs5CloudGames(const std::string &npsso, const std::string &locale,
 			std::vector<CloudGame> *out_games, std::string *out_error, bool force_refresh = false);
 
@@ -85,8 +88,6 @@ class CloudCatalog
 
 		bool FetchOwnedPs5EntitlementToken(const std::string &npsso,
 			std::string *out_token, std::string *out_error);
-		bool FetchOwnedPs5EntitlementsPage(const std::string &token, int start,
-			std::vector<CloudGame> *out_page, bool *out_has_more, std::string *out_error);
 };
 
 // PSNOW product ids for PS4 titles use "-CUSA" or "-PPSA" SKU prefixes;

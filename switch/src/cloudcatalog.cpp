@@ -9,8 +9,10 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 #include <json-c/json.h>
 
@@ -80,6 +82,285 @@ namespace
 			return json_object_get_string(image_url_obj);
 
 		return "";
+	}
+
+	// --- PS5 owned-games entitlement parsing/filtering -----------------------
+	// Ports upstream Android's PsCloudOwnership.kt (filterOwnedPs5Games +
+	// buildOwnedGamesFromEntitlements) as closely as C++/json-c allow, since
+	// that's the algorithm CloudPad's own PS5 Library tab uses - the previous
+	// port here instead cross-referenced owned entitlements against
+	// FetchPs5CloudCatalog and required package_type=="PSGD", neither of which
+	// upstream's real Library-building code does, and which silently dropped
+	// every owned title whose SKU didn't happen to also appear in the public
+	// browse catalog.
+
+	struct Ps5Entitlement
+	{
+		std::string id;
+		std::string product_id;
+		bool active_flag = false;
+		std::string package_type;
+		std::string name;
+		int feature_type = 0; // PSN feature_type: 3=full game, 1=trial/free, 0=add-on/DLC
+		std::string sku_type; // "GAME_TRIAL" for limited-play game trials
+		std::string icon_url; // game_meta.icon_url - box art straight from the entitlement itself
+	};
+
+	std::string ToLowerAscii(const std::string &s)
+	{
+		std::string out = s;
+		for(char &c : out)
+			if(c >= 'A' && c <= 'Z')
+				c = c - 'A' + 'a';
+		return out;
+	}
+
+	bool ContainsCI(const std::string &haystack, const char *needle_lower)
+	{
+		return ToLowerAscii(haystack).find(needle_lower) != std::string::npos;
+	}
+
+	bool IsAsciiAlnum(char c)
+	{
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+	}
+
+	// Case-insensitive whole-word search - matches upstream's \bword\b regex
+	// (so e.g. "Demolition" doesn't false-positive on "demo").
+	bool ContainsWordCI(const std::string &haystack, const char *word_lower)
+	{
+		std::string lower = ToLowerAscii(haystack);
+		size_t word_len = strlen(word_lower);
+		size_t pos = 0;
+		while((pos = lower.find(word_lower, pos)) != std::string::npos)
+		{
+			bool left_ok = (pos == 0) || !IsAsciiAlnum(lower[pos - 1]);
+			size_t end = pos + word_len;
+			bool right_ok = (end == lower.size()) || !IsAsciiAlnum(lower[end]);
+			if(left_ok && right_ok)
+				return true;
+			pos++;
+		}
+		return false;
+	}
+
+	bool EndsWithCI(const std::string &s, const char *suffix_lower)
+	{
+		std::string lower = ToLowerAscii(s);
+		size_t suffix_len = strlen(suffix_lower);
+		if(lower.size() < suffix_len)
+			return false;
+		return lower.compare(lower.size() - suffix_len, suffix_len, suffix_lower) == 0;
+	}
+
+	// Ports PsCloudOwnership.parseEntitlement.
+	bool ParsePs5Entitlement(json_object *ent, Ps5Entitlement *out)
+	{
+		std::string id = JsonGetString(ent, "id");
+		if(id.empty())
+			return false;
+
+		json_object *game_meta = nullptr;
+		bool has_meta = json_object_object_get_ex(ent, "game_meta", &game_meta);
+
+		out->id = id;
+		out->product_id = JsonGetString(ent, "product_id");
+
+		json_object *active_obj = nullptr;
+		out->active_flag = json_object_object_get_ex(ent, "active_flag", &active_obj) && json_object_get_boolean(active_obj);
+
+		out->package_type = has_meta ? JsonGetString(game_meta, "package_type") : "";
+
+		out->name = has_meta ? JsonGetString(game_meta, "name") : "";
+		if(out->name.empty())
+			out->name = id;
+
+		out->sku_type = JsonGetString(ent, "sku_type");
+		if(out->sku_type.empty() && has_meta)
+			out->sku_type = JsonGetString(game_meta, "sku_type");
+
+		json_object *feature_obj = nullptr;
+		out->feature_type = json_object_object_get_ex(ent, "feature_type", &feature_obj) ? json_object_get_int(feature_obj) : 0;
+
+		out->icon_url = has_meta ? JsonGetString(game_meta, "icon_url") : "";
+		return true;
+	}
+
+	// Ports PsCloudOwnership.filterOwnedPs5Games exactly. feature_type 0 is
+	// DLC/add-ons/themes/avatars (never streamable games); feature_type 1
+	// (PS Plus subscription access and Game Trials) is intentionally kept -
+	// Game Trials are valid streaming entries.
+	bool KeepPs5Entitlement(const Ps5Entitlement &ent)
+	{
+		if(!ent.active_flag)
+			return false;
+		if(ent.feature_type == 0)
+			return false;
+		if(EndsWithCI(ent.package_type, "gt"))
+			return false;
+		if(ContainsCI(ent.sku_type, "trial"))
+			return false;
+		if(ContainsWordCI(ent.name, "demo") || ContainsWordCI(ent.name, "trial"))
+			return false;
+		return true;
+	}
+
+	// Digital extras (artbooks, soundtracks, bonus-content viewer apps) are
+	// sold as their own entitlement but Sony gives them the exact same
+	// package_type/featureType shape as a real game, so name matching is the
+	// only signal available - matches upstream's DIGITAL_EXTRA_NAME_PATTERNS.
+	bool IsDigitalExtraName(const std::string &name)
+	{
+		std::string lower = ToLowerAscii(name);
+		static const char *kSubstrings[] = {
+			"artbook", "art book", "soundtrack", "content viewer", "bonus content",
+		};
+		for(const char *needle : kSubstrings)
+			if(lower.find(needle) != std::string::npos)
+				return true;
+		return lower.rfind("the art of ", 0) == 0; // e.g. "The Art of Starfield"
+	}
+
+	bool IsFullGamePs5Entitlement(const Ps5Entitlement &ent)
+	{
+		return ent.feature_type == 3 || EndsWithCI(ent.package_type, "gd");
+	}
+
+	// Ports PsCloudOwnership.ownedStreamRank - picks which entitlement wins
+	// when several resolve to the same stream id, preferring PS5-native
+	// (PPSA) full-game entitlements whose id equals their own product_id.
+	int OwnedPs5StreamRank(const Ps5Entitlement &ent)
+	{
+		int rank = 0;
+		if(!ent.product_id.empty() && ent.product_id == ent.id)
+			rank += 4;
+		if(IsFullGamePs5Entitlement(ent))
+			rank += 2;
+		if(!ent.id.empty())
+			rank += 1;
+		if(ent.id.find("PPSA") != std::string::npos)
+			rank += 3;
+		return rank;
+	}
+
+	// Ports PsCloudOwnership.buildOwnedGamesFromEntitlements: builds the
+	// Library list directly from filtered entitlements, restricted to
+	// PS5-native (PPSA) ids since this Library is the PS Cloud tab, not
+	// PSNOW - no public-catalog membership check, nothing to hardcode per
+	// title.
+	std::vector<CloudGame> BuildOwnedPs5GamesFromEntitlements(const std::vector<Ps5Entitlement> &filtered)
+	{
+		std::vector<std::pair<std::string, const Ps5Entitlement *>> resolved;
+		for(const auto &ent : filtered)
+		{
+			// PSTRACK entitlements are Sony-issued analytics placeholders that
+			// ride along with a real purchase under the same product_id, not a
+			// separately streamable product; PSMEDIA is a PS5-native media app
+			// (Netflix, YouTube, etc), not a game.
+			if(ent.package_type == "PSMEDIA" || ent.package_type == "PSTRACK")
+				continue;
+			if(IsDigitalExtraName(ent.name))
+				continue;
+
+			// bestStreamIdentifier(id, productId): id always wins when present,
+			// and parseEntitlement already guarantees id is non-empty here.
+			const std::string &stream_id = ent.id.empty() ? ent.product_id : ent.id;
+			if(stream_id.find("PPSA") == std::string::npos)
+				continue;
+
+			resolved.push_back({stream_id, &ent});
+		}
+
+		std::vector<std::string> order;
+		std::map<std::string, const Ps5Entitlement *> best_by_id;
+		std::map<std::string, int> best_rank_by_id;
+		for(const auto &entry : resolved)
+		{
+			const std::string &stream_id = entry.first;
+			const Ps5Entitlement *ent = entry.second;
+			int rank = OwnedPs5StreamRank(*ent);
+			auto it = best_rank_by_id.find(stream_id);
+			if(it == best_rank_by_id.end())
+			{
+				order.push_back(stream_id);
+				best_by_id[stream_id] = ent;
+				best_rank_by_id[stream_id] = rank;
+			}
+			else if(rank > it->second)
+			{
+				best_by_id[stream_id] = ent;
+				it->second = rank;
+			}
+		}
+
+		std::vector<CloudGame> games;
+		for(const std::string &stream_id : order)
+		{
+			const Ps5Entitlement *best = best_by_id[stream_id];
+			CloudGame game;
+			game.product_id = stream_id;
+			game.entitlement_id = best->id;
+			game.name = best->name;
+			game.image_url = best->icon_url;
+			game.platform = "ps5";
+			game.service_type = "pscloud";
+			games.push_back(game);
+		}
+		return games;
+	}
+
+	// One page of the paginated internal_entitlements fetch, parsed into raw
+	// entitlements (unfiltered) - matches upstream's fetchEntitlementsPaginated.
+	bool FetchPs5EntitlementsPage(const std::string &token, int start,
+		std::vector<Ps5Entitlement> *out_page, int *out_page_count, std::string *out_error)
+	{
+		const int page_size = 300;
+		std::string url = "https://commerce.api.np.km.playstation.net/commerce/api/v1/users/me/internal_entitlements"
+			"?fields=game_meta&entitlement_type=5&start=" + std::to_string(start) + "&size=" + std::to_string(page_size);
+
+		std::vector<std::string> headers = {
+			"Authorization: Bearer " + token,
+			"Accept: application/json",
+		};
+
+		HttpResponse resp;
+		if(!HttpRequest(url, "GET", headers, "", &resp, out_error))
+			return false;
+
+		if(resp.status == 401 || resp.status == 403)
+		{
+			*out_error = "Authentication failed fetching owned games (HTTP " + std::to_string(resp.status) + ")";
+			return false;
+		}
+		if(resp.status != 200)
+		{
+			*out_error = "Owned games request failed (HTTP " + std::to_string(resp.status) + ")";
+			return false;
+		}
+
+		json_object *root = json_tokener_parse(resp.body.c_str());
+		if(!root)
+		{
+			*out_error = "Invalid JSON from owned games response";
+			return false;
+		}
+
+		int count = 0;
+		json_object *entitlements = nullptr;
+		if(json_object_object_get_ex(root, "entitlements", &entitlements) && json_object_is_type(entitlements, json_type_array))
+		{
+			count = json_object_array_length(entitlements);
+			for(int i = 0; i < count; i++)
+			{
+				Ps5Entitlement ent;
+				if(ParsePs5Entitlement(json_object_array_get_idx(entitlements, i), &ent))
+					out_page->push_back(ent);
+			}
+		}
+		json_object_put(root);
+
+		*out_page_count = count;
+		return true;
 	}
 
 	std::string CacheFilePath(const std::string &key)
@@ -629,87 +910,6 @@ bool CloudCatalog::FetchOwnedPs5EntitlementToken(const std::string &npsso,
 	return true;
 }
 
-bool CloudCatalog::FetchOwnedPs5EntitlementsPage(const std::string &token, int start,
-	std::vector<CloudGame> *out_page, bool *out_has_more, std::string *out_error)
-{
-	const int page_size = 300;
-	std::string url = "https://commerce.api.np.km.playstation.net/commerce/api/v1/users/me/internal_entitlements"
-		"?fields=game_meta&entitlement_type=5&start=" + std::to_string(start) + "&size=" + std::to_string(page_size);
-
-	std::vector<std::string> headers = {
-		"Authorization: Bearer " + token,
-		"Accept: application/json",
-	};
-
-	HttpResponse resp;
-	if(!HttpRequest(url, "GET", headers, "", &resp, out_error))
-		return false;
-
-	if(resp.status == 401 || resp.status == 403)
-	{
-		*out_error = "Authentication failed fetching owned games (HTTP " + std::to_string(resp.status) + ")";
-		return false;
-	}
-	if(resp.status != 200)
-	{
-		*out_error = "Owned games request failed (HTTP " + std::to_string(resp.status) + ")";
-		return false;
-	}
-
-	json_object *root = json_tokener_parse(resp.body.c_str());
-	if(!root)
-	{
-		*out_error = "Invalid JSON from owned games response";
-		return false;
-	}
-
-	int count = 0;
-	json_object *entitlements = nullptr;
-	if(json_object_object_get_ex(root, "entitlements", &entitlements) && json_object_is_type(entitlements, json_type_array))
-	{
-		count = json_object_array_length(entitlements);
-		for(int i = 0; i < count; i++)
-		{
-			json_object *ent = json_object_array_get_idx(entitlements, i);
-
-			// Only PS5 game entitlements (package_type PSGD), currently active,
-			// excluding subscriptions/services (IP/SUB product id prefixes) -
-			// matches upstream's filterOwnedPs5Games exactly.
-			json_object *game_meta = nullptr;
-			if(!json_object_object_get_ex(ent, "game_meta", &game_meta))
-				continue;
-			if(JsonGetString(game_meta, "package_type") != "PSGD")
-				continue;
-
-			json_object *active_obj = nullptr;
-			bool active = json_object_object_get_ex(ent, "active_flag", &active_obj) && json_object_get_boolean(active_obj);
-			if(!active)
-				continue;
-
-			std::string product_id = JsonGetString(ent, "product_id");
-			if(product_id.rfind("IP", 0) == 0 || product_id.rfind("SUB", 0) == 0)
-				continue;
-
-			std::string entitlement_id = JsonGetString(ent, "id");
-			if(entitlement_id.empty())
-				continue;
-
-			CloudGame game;
-			game.product_id = product_id;
-			game.entitlement_id = entitlement_id;
-			game.name = JsonGetString(game_meta, "name");
-			game.image_url = JsonGetString(game_meta, "icon_url");
-			game.platform = "ps5";
-			game.service_type = "pscloud";
-			out_page->push_back(game);
-		}
-	}
-	json_object_put(root);
-
-	*out_has_more = (count >= page_size);
-	return true;
-}
-
 bool CloudCatalog::FetchOwnedPs5CloudGames(const std::string &npsso, const std::string &locale,
 	std::vector<CloudGame> *out_games, std::string *out_error, bool force_refresh)
 {
@@ -725,77 +925,64 @@ bool CloudCatalog::FetchOwnedPs5CloudGames(const std::string &npsso, const std::
 		return false;
 	}
 
-	std::vector<CloudGame> catalog;
-	std::string catalog_error;
-	if(!FetchPs5CloudCatalog(locale, &catalog, &catalog_error, force_refresh))
-	{
-		*out_error = "Could not load PS5 cloud catalog: " + catalog_error;
-		return false;
-	}
-
 	std::string token;
 	if(!FetchOwnedPs5EntitlementToken(npsso, &token, out_error))
 		return false;
 
-	std::vector<CloudGame> owned;
+	std::vector<Ps5Entitlement> raw;
 	int start = 0;
 	while(true)
 	{
-		std::vector<CloudGame> page;
-		bool has_more = false;
-		if(!FetchOwnedPs5EntitlementsPage(token, start, &page, &has_more, out_error))
+		std::vector<Ps5Entitlement> page;
+		int page_count = 0;
+		if(!FetchPs5EntitlementsPage(token, start, &page, &page_count, out_error))
 			return false;
-		owned.insert(owned.end(), page.begin(), page.end());
-		if(!has_more)
+		raw.insert(raw.end(), page.begin(), page.end());
+		if(page_count < 300)
 			break;
-		start += 300;
+		start += page_count;
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
-	// Cross-reference: an owned title only counts if it's also in the public
-	// streaming catalog (i.e. Sony's cloud infrastructure can actually stream
-	// it) - matches upstream's processCrossReferenceComplete, including its
-	// product-id-then-entitlement-id fallback match order.
-	std::vector<CloudGame> matched;
-	for(const auto &owned_game : owned)
+	std::vector<Ps5Entitlement> filtered;
+	for(const auto &ent : raw)
+		if(KeepPs5Entitlement(ent))
+			filtered.push_back(ent);
+
+	std::vector<CloudGame> games = BuildOwnedPs5GamesFromEntitlements(filtered);
+	CHIAKI_LOGI(log, "CloudCatalog: %zu raw entitlements, %zu after filter, %zu owned PS5 games",
+		raw.size(), filtered.size(), games.size());
+
+	// Best-effort box art upgrade: entitlements only carry a small square
+	// icon, while the public catalog has real cover art for most titles.
+	// Never required for a game to count as owned or to stream - if this
+	// fetch fails or a title has no catalog match, it just keeps its
+	// entitlement icon - matches upstream's enrichWithCatalogArt intent.
+	std::vector<CloudGame> catalog;
+	std::string catalog_error;
+	if(FetchPs5CloudCatalog(locale, &catalog, &catalog_error, force_refresh))
 	{
-		const CloudGame *catalog_match = nullptr;
-		for(const auto &c : catalog)
-		{
-			if(c.product_id == owned_game.product_id)
-			{
-				catalog_match = &c;
-				break;
-			}
-		}
-		if(!catalog_match)
+		for(auto &game : games)
 		{
 			for(const auto &c : catalog)
 			{
-				if(c.product_id == owned_game.entitlement_id)
+				if(c.product_id == game.product_id || c.product_id == game.entitlement_id)
 				{
-					catalog_match = &c;
+					if(!c.image_url.empty())
+						game.image_url = c.image_url;
 					break;
 				}
 			}
 		}
-		if(!catalog_match)
-			continue;
-
-		CloudGame game = owned_game;
-		if(game.image_url.empty())
-			game.image_url = catalog_match->image_url;
-		matched.push_back(game);
 	}
 
-	if(matched.empty())
+	if(games.empty())
 	{
-		*out_error = "No owned PS5 titles matched the cloud streaming catalog";
+		*out_error = "No owned PS5 titles found";
 		return false;
 	}
 
-	WriteCache("ps5owned", matched);
-	*out_games = matched;
-	CHIAKI_LOGI(log, "CloudCatalog: cross-referenced owned PS5 games, %zu playable", out_games->size());
+	WriteCache("ps5owned", games);
+	*out_games = games;
 	return true;
 }
