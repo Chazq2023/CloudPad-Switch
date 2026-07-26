@@ -2,7 +2,8 @@
 #include <fstream>
 
 #include <chiaki/base64.h>
-#include "settings.h"
+#include "settings.h" // pulls in host.h -> <netinet/in.h> before holepunch.h needs INET6_ADDRSTRLEN
+#include <chiaki/remote/holepunch.h>
 
 Settings::Settings()
 {
@@ -163,6 +164,21 @@ void Settings::ParseFile()
 					if(current_host != nullptr)
 						this->SetChiakiTarget(current_host, value);
 					break;
+				case NPSSO:
+					this->SetNPSSO(value);
+					break;
+				case PSN_ACCESS_TOKEN:
+					this->SetPSNAccessToken(value);
+					break;
+				case PSN_ID_TOKEN:
+					this->SetPSNIdToken(value);
+					break;
+				case PSN_TOKEN_EXPIRY:
+					this->SetPSNTokenExpiry(value);
+					break;
+				case DUID:
+					this->global_duid = value;
+					break;
 			} // ci switch
 			if(rp_key_b && rp_regist_key_b && rp_key_type_b)
 				// the current host contains rp key data
@@ -207,6 +223,21 @@ int Settings::WriteFile()
 
 		if(this->global_psn_account_id.length())
 			config_file << "psn_account_id = \"" << this->global_psn_account_id << "\"\n";
+
+		if(this->global_npsso.length())
+			config_file << "npsso = \"" << this->global_npsso << "\"\n";
+
+		if(this->global_psn_access_token.length())
+			config_file << "psn_access_token = \"" << this->global_psn_access_token << "\"\n";
+
+		if(this->global_psn_id_token.length())
+			config_file << "psn_id_token = \"" << this->global_psn_id_token << "\"\n";
+
+		if(this->global_psn_token_expiry)
+			config_file << "psn_token_expiry = " << std::to_string(this->global_psn_token_expiry) << "\n";
+
+		if(this->global_duid.length())
+			config_file << "duid = \"" << this->global_duid << "\"\n";
 
 		// write host config in file
 		// loop over all configured
@@ -608,6 +639,83 @@ bool Settings::SetHostRPKeyType(Host *host, std::string value)
 		return true;
 	}
 	return false;
+}
+
+std::string Settings::GetNPSSO()
+{
+	return this->global_npsso;
+}
+
+void Settings::SetNPSSO(std::string npsso)
+{
+	this->global_npsso = npsso;
+}
+
+std::string Settings::GetPSNAccessToken()
+{
+	return this->global_psn_access_token;
+}
+
+void Settings::SetPSNAccessToken(std::string token)
+{
+	this->global_psn_access_token = token;
+}
+
+std::string Settings::GetPSNIdToken()
+{
+	return this->global_psn_id_token;
+}
+
+void Settings::SetPSNIdToken(std::string token)
+{
+	this->global_psn_id_token = token;
+}
+
+int64_t Settings::GetPSNTokenExpiry()
+{
+	return this->global_psn_token_expiry;
+}
+
+void Settings::SetPSNTokenExpiry(int64_t expiry_unix_time)
+{
+	this->global_psn_token_expiry = expiry_unix_time;
+}
+
+void Settings::SetPSNTokenExpiry(std::string expiry_unix_time)
+{
+	this->SetPSNTokenExpiry((int64_t)std::atoll(expiry_unix_time.c_str()));
+}
+
+std::string Settings::GetOrCreateDUID()
+{
+	if(this->global_duid.empty())
+	{
+		size_t duid_size = CHIAKI_DUID_STR_SIZE;
+		char duid_arr[CHIAKI_DUID_STR_SIZE + 1] = { 0 };
+		ChiakiErrorCode err = chiaki_holepunch_generate_client_device_uid(duid_arr, &duid_size);
+		if(err == CHIAKI_ERR_SUCCESS)
+		{
+			this->global_duid = std::string(duid_arr);
+			this->WriteFile();
+		}
+		else
+			CHIAKI_LOGE(&this->log, "Failed to generate client device uid");
+	}
+	return this->global_duid;
+}
+
+bool Settings::IsCloudLoggedIn()
+{
+	return this->global_psn_access_token.length() > 0;
+}
+
+void Settings::ClearCloudLogin()
+{
+	this->global_npsso = "";
+	this->global_psn_access_token = "";
+	this->global_psn_id_token = "";
+	this->global_psn_token_expiry = 0;
+	// keep global_duid: it identifies this device, not this login session
 }
 
 #ifdef CHIAKI_ENABLE_SWITCH_OVERCLOCK

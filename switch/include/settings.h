@@ -36,6 +36,13 @@ class Settings
 		std::string global_psn_account_id = "";
 		HapticPreset global_haptic = HAPTIC_PRESET_DIABLED;
 
+		// PSN cloud gaming account state (account-level, not per-host)
+		std::string global_npsso = "";
+		std::string global_psn_access_token = "";
+		std::string global_psn_id_token = "";
+		int64_t global_psn_token_expiry = 0; // unix epoch seconds, 0 = unknown/expired
+		std::string global_duid = "";
+
 		typedef enum configurationitem
 		{
 			UNKNOWN,
@@ -50,6 +57,11 @@ class Settings
 			VIDEO_FPS,
 			TARGET,
 			HAPTIC,
+			NPSSO,
+			PSN_ACCESS_TOKEN,
+			PSN_ID_TOKEN,
+			PSN_TOKEN_EXPIRY,
+			DUID,
 		} ConfigurationItem;
 
 		// dummy parser implementation
@@ -67,6 +79,11 @@ class Settings
 			{VIDEO_FPS, std::regex("^\\s*video_fps\\s*=\\s*\"?(60|30)\"?")},
 			{TARGET, std::regex("^\\s*target\\s*=\\s*\"?(\\d+)\"?")},
 			{HAPTIC, std::regex("^\\s*haptic\\s*=\\s*\"?(\\d+)\"?")},
+			{NPSSO, std::regex("^\\s*npsso\\s*=\\s*\"?([\\w./=+-]+)\"?")},
+			{PSN_ACCESS_TOKEN, std::regex("^\\s*psn_access_token\\s*=\\s*\"?([\\w./=+-]+)\"?")},
+			{PSN_ID_TOKEN, std::regex("^\\s*psn_id_token\\s*=\\s*\"?([\\w./=+-]+)\"?")},
+			{PSN_TOKEN_EXPIRY, std::regex("^\\s*psn_token_expiry\\s*=\\s*\"?(\\d+)\"?")},
+			{DUID, std::regex("^\\s*duid\\s*=\\s*\"?([\\w-]+)\"?")},
 		};
 
 		ConfigurationItem ParseLine(std::string * line, std::string * value);
@@ -127,6 +144,27 @@ class Settings
 
 		int GetHostRPKeyType(Host * host);
 		bool SetHostRPKeyType(Host * host, std::string value);
+
+		// PSN cloud gaming account state
+		std::string GetNPSSO();
+		void SetNPSSO(std::string npsso);
+
+		std::string GetPSNAccessToken();
+		void SetPSNAccessToken(std::string token);
+
+		std::string GetPSNIdToken();
+		void SetPSNIdToken(std::string token);
+
+		int64_t GetPSNTokenExpiry();
+		void SetPSNTokenExpiry(int64_t expiry_unix_time);
+		void SetPSNTokenExpiry(std::string expiry_unix_time);
+
+		// Stable per-device identifier sent to PSN cloud gaming APIs. Generated
+		// once via chiaki_holepunch_generate_client_device_uid and persisted.
+		std::string GetOrCreateDUID();
+
+		bool IsCloudLoggedIn();
+		void ClearCloudLogin();
 };
 
 #endif // CHIAKI_SETTINGS_H

@@ -93,6 +93,7 @@ add_executable(chiaki-borealis WIN32
 	src/views/ps_remote_play.cpp
 	src/discoverymanager.cpp
 	src/settings.cpp
+	src/cloudauth.cpp
 	src/io.cpp
 	src/host.cpp
 	src/main.cpp

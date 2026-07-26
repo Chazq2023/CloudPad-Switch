@@ -14,6 +14,7 @@
 #include <fmt/format.h>
 
 #include <borealis.hpp>
+#include "cloudauth.h"
 #include "discoverymanager.h"
 #include "host.h"
 #include "io.h"
@@ -55,9 +56,14 @@ class MainApplication
 		IO *io;
 		brls::TabFrame *rootFrame;
 		std::map<Host *, HostInterface *> host_menuitems;
+		brls::ListItem *cloud_login_status = nullptr;
 
 		bool BuildConfigurationMenu(brls::List *, Host *host = nullptr);
 		void BuildAddHostConfigurationMenu(brls::List *);
+		void BuildAccountMenu(brls::List *);
+		void SignIn();
+		void SignOut();
+		void RefreshLoginStatus();
 
 	public:
 		MainApplication(DiscoveryManager *discoverymanager);
