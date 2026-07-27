@@ -55,12 +55,19 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	// this app's trivial loopback stop-pipe signaling socket was demanding 5MB
 	// up front. Against a tiny real pool, nxlink's TCP socket plus one 5MB UDP
 	// reservation was apparently already at or past the edge. Shrinking this
-	// back down to a size appropriate for small signaling sockets to unblock
-	// everything before Takion; Takion's own setsockopt call growing its
-	// specific socket's buffer at connection time (lib/src/takion.c:278) will
-	// need separate handling once the flow actually reaches that point.
+	// down to 0x10000 unblocked the whole connection flow (confirmed on-device:
+	// full session/Takion handshake succeeded), but on-device streaming then
+	// showed severe packet loss and no audio - Takion's own setsockopt call
+	// requesting 4MB (lib/src/takion.c:278) can't grow the socket past this
+	// process-wide default at all (Switch UDP sockets are fixed-size from
+	// creation, confirmed via TAKION_RCVBUF_DETAIL logging actual=65536 despite
+	// requesting 4194304), and 64KB is nowhere near enough to absorb bursts at
+	// the ~25-48 Mbit/s this stream negotiates before the kernel starts
+	// dropping packets. Bisecting upward from the proven-safe 0x10000 toward
+	// something Takion can actually use, without getting anywhere near the 5MB
+	// that broke the connection outright with just 2 sockets open.
 	.udp_tx_buf_size = 0x10000,
-	.udp_rx_buf_size = 0x10000,
+	.udp_rx_buf_size = 0x80000, // 512KB
 
 	.sb_efficiency = 16,
 
