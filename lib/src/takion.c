@@ -539,11 +539,16 @@ error_gkcrypt_local_mutex:
 
 CHIAKI_EXPORT void chiaki_takion_close(ChiakiTakion *takion)
 {
+	printf("[TAKION CLOSE] probe: before stop_pipe_stop\n"); fflush(stdout);
 	chiaki_stop_pipe_stop(&takion->stop_pipe);
+	printf("[TAKION CLOSE] probe: before thread join\n"); fflush(stdout);
 	chiaki_thread_join(&takion->thread, NULL);
+	printf("[TAKION CLOSE] probe: after thread join\n"); fflush(stdout);
 	chiaki_stop_pipe_fini(&takion->stop_pipe);
+	printf("[TAKION CLOSE] probe: after stop_pipe_fini\n"); fflush(stdout);
 	chiaki_mutex_fini(&takion->seq_num_local_mutex);
 	chiaki_mutex_fini(&takion->gkcrypt_local_mutex);
+	printf("[TAKION CLOSE] probe: done\n"); fflush(stdout);
 }
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_crypt_advance_key_pos(ChiakiTakion *takion, size_t data_size, uint64_t *key_pos)
@@ -1252,11 +1257,14 @@ static void *takion_thread_func(void *user)
 		chiaki_cond_signal(&takion->packet_process_cond);
 	}
 
+	printf("[TAKION SHUTDOWN] probe: recv loop exited, stopping packet process thread\n"); fflush(stdout);
 	chiaki_mutex_lock(&takion->packet_process_mutex);
 	takion->packet_process_thread_running = false;
 	chiaki_mutex_unlock(&takion->packet_process_mutex);
 	chiaki_cond_signal(&takion->packet_process_cond);
+	printf("[TAKION SHUTDOWN] probe: before packet_process_thread join\n"); fflush(stdout);
 	chiaki_thread_join(&takion->packet_process_thread, NULL);
+	printf("[TAKION SHUTDOWN] probe: after packet_process_thread join\n"); fflush(stdout);
 
 	while(takion->packet_process_queue_head)
 	{
@@ -1266,18 +1274,24 @@ static void *takion_thread_func(void *user)
 		free(entry);
 	}
 	takion->packet_process_queue_tail = NULL;
+	printf("[TAKION SHUTDOWN] probe: queue drained\n"); fflush(stdout);
 
 error_packet_process_cond:
 	chiaki_cond_fini(&takion->packet_process_cond);
+	printf("[TAKION SHUTDOWN] probe: after packet_process_cond fini\n"); fflush(stdout);
 error_packet_process_mutex:
 	chiaki_mutex_fini(&takion->packet_process_mutex);
+	printf("[TAKION SHUTDOWN] probe: after packet_process_mutex fini\n"); fflush(stdout);
 error_send_buffer:
 	chiaki_takion_send_buffer_fini(&takion->send_buffer);
+	printf("[TAKION SHUTDOWN] probe: after send_buffer fini\n"); fflush(stdout);
 
 error_reoder_queue:
 	chiaki_reorder_queue_fini(&takion->data_queue);
+	printf("[TAKION SHUTDOWN] probe: after reorder_queue fini\n"); fflush(stdout);
 
 beach:
+	printf("[TAKION SHUTDOWN] probe: at beach label\n"); fflush(stdout);
 	if(takion->cb)
 	{
 		ChiakiTakionEvent event = { 0 };
