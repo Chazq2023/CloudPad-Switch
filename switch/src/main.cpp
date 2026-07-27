@@ -43,14 +43,16 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 
 	.sb_efficiency = 8,
 
-	// The cloud auth/catalog/Kamaji/Gaikai flow makes many more sequential
-	// blocking HTTPS requests per stream launch than local Remote Play ever
-	// did (sign-in, catalog/entitlement fetches, then ~8 Gaikai allocation
-	// steps), each opening and closing its own libcurl socket - 16 concurrent
-	// BSD sessions was tight enough to run out by the time chiaki_session_init
-	// opens its own stop-pipe socket, which then fails with socket()==-1
-	// (see chiaki_stop_pipe_init's __SWITCH__ branch, lib/src/stoppipe.c).
-	.num_bsd_sessions = 32,
+	// Raising this past 16 (tried 32) broke socketInitialize()/nxlinkStdio()
+	// outright - no nxlink logs at all and every HTTP request failing with
+	// "could not connect to server", i.e. the BSD sockets service itself
+	// never came up, not just running short on session slots. 16 is the
+	// known-working value (everything up to the very last socket - chiaki_
+	// session_init's own stop-pipe - succeeds under real usage); the tail-end
+	// exhaustion at that point is instead handled with a bounded retry in
+	// chiaki_stop_pipe_init (lib/src/stoppipe.c), which doesn't risk
+	// breaking socket init the way guessing a bigger session count does.
+	.num_bsd_sessions = 16,
 	.bsd_service_type = BsdServiceType_User,
 };
 #endif // __SWITCH__

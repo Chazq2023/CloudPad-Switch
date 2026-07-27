@@ -29,11 +29,24 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 	// struct sockaddr_in addr;
 	int addr_size = sizeof(stop_pipe->addr);
 
-	printf("[STOP PIPE] probe: before socket()\n"); fflush(stdout);
-	errno = 0;
-	stop_pipe->fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	printf("[STOP PIPE] probe: after socket(), fd=%d errno=%d (%s)\n",
-		stop_pipe->fd, errno, strerror(errno)); fflush(stdout);
+	// A socket a prior libcurl HTTP request used (this app's cloud
+	// auth/catalog/Kamaji/Gaikai flow makes many sequential requests before
+	// this point) can still be held by the BSD sockets service for a moment
+	// after close() returns, even with num_bsd_sessions comfortably above
+	// the real concurrent usage - retry briefly on transient exhaustion
+	// instead of failing the whole session outright.
+	const int kMaxSocketAttempts = 5;
+	for(int attempt = 0; attempt < kMaxSocketAttempts; attempt++)
+	{
+		errno = 0;
+		stop_pipe->fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if(stop_pipe->fd >= 0)
+			break;
+		printf("[STOP PIPE] socket() failed (attempt %d/%d), errno=%d (%s)\n",
+			attempt + 1, kMaxSocketAttempts, errno, strerror(errno));
+		fflush(stdout);
+		usleep(50000);
+	}
 	if(stop_pipe->fd < 0)
 		return CHIAKI_ERR_UNKNOWN;
 	stop_pipe->addr.sin_family = AF_INET;
