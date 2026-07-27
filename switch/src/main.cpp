@@ -37,42 +37,33 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	.tcp_tx_buf_max_size = 0x40000,
 	.tcp_rx_buf_max_size = 0x40000,
 
-	// Takion (lib/src/takion.c, TAKION_A_RWND) always requests a 4MB
-	// SO_RCVBUF on its UDP socket - libnx's UDP buffers are a fixed size (no
-	// "max" growth field like TCP has), so udp_rx_buf_size has to be at least
-	// that big or the setsockopt call fails outright with ENOBUFS ("No buffer
-	// space available") the moment a stream actually tries to connect. This
-	// was never caught before because nothing in this app's history had
-	// reached an actual Takion connection attempt on real hardware yet.
-	.udp_tx_buf_size = 0x40000,
-	.udp_rx_buf_size = 0x500000, // 5MB: 4MB required + headroom
+	// A boot-time diagnostic probe (right after nxlink comes up, before any of
+	// the app's own code runs - see ProbeSocketBudgetAtBoot below) proved this
+	// pool is exhausted after the SECOND socket the process ever creates: one
+	// TCP connection (nxlink's own persistent stdout link) plus one throwaway
+	// UDP socket, and the UDP one already fails outright with ENOBUFS. That
+	// ruled out every earlier theory in one shot: it's not a leak across the
+	// cloud session's HTTP calls (fails before any of them run), not a
+	// session-count problem (num_bsd_sessions=16 is nowhere near used up by 2
+	// sockets), and sb_efficiency scaling (8->16, zero measured effect) was
+	// never the real lever - the actual effective pool is evidently far
+	// smaller than the nominal sb_efficiency * sum-of-buffers formula
+	// suggests, likely clamped by the sysmodule itself. udp_rx_buf_size was
+	// 0x500000 (5MB) - sized for Takion's later 4MB SO_RCVBUF requirement
+	// (lib/src/takion.c, TAKION_A_RWND) - but on Switch that default is
+	// reserved for EVERY UDP socket at creation, not just Takion's, so even
+	// this app's trivial loopback stop-pipe signaling socket was demanding 5MB
+	// up front. Against a tiny real pool, nxlink's TCP socket plus one 5MB UDP
+	// reservation was apparently already at or past the edge. Shrinking this
+	// back down to a size appropriate for small signaling sockets to unblock
+	// everything before Takion; Takion's own setsockopt call growing its
+	// specific socket's buffer at connection time (lib/src/takion.c:278) will
+	// need separate handling once the flow actually reaches that point.
+	.udp_tx_buf_size = 0x10000,
+	.udp_rx_buf_size = 0x10000,
 
-	// The shared socket-buffer pool size is sb_efficiency * (tcp_tx_buf_max_size
-	// + tcp_rx_buf_max_size + udp_tx_buf_size + udp_rx_buf_size). Doubling this
-	// from 8 to 16 was tried on-device and made zero difference to the
-	// stop-pipe ENOBUFS failure below (identical errno=105 every attempt, and
-	// nxlink/socketInitialize still came up fine at this size, which it would
-	// NOT have if tmemCreate() itself had failed to allocate the pool) - so
-	// buffer bytes are not the actual constraint here. Left doubled anyway
-	// since it's proven harmless and gives real headroom for the
-	// udp_rx_buf_size bump above.
 	.sb_efficiency = 16,
 
-	// Cloud session establishment makes 14+ sequential HTTP calls (client IDs,
-	// config, tokens, auth, lock, datacenter select, allocation), each via its
-	// own curl_easy_init/cleanup pair - closed properly on the client side. By
-	// the time chiaki_stop_pipe_init opens this app's first-ever UDP socket
-	// right after, it fails with ENOBUFS on every one of 10 retry attempts
-	// spread across 3 real seconds (see lib/src/stoppipe.c) - not a timing
-	// race, a hard/permanent exhaustion. Since sb_efficiency (buffer bytes)
-	// provably isn't it, and nothing leaks a client-side fd, the remaining
-	// candidate is this session budget itself: 16 is proven insufficient. 18,
-	// 20, 24 and 32 all broke socketInitialize()/nxlinkStdio() outright (total
-	// silence, no logs at all), so the hard ceiling on this device/firmware is
-	// 16 - going any higher isn't viable at all, let alone enough headroom.
-	// Back to the known-safe 16; the fix has to be on the leak side instead
-	// (see lib/src/stoppipe.c's diagnostic probe, and the comment on the 14+
-	// sequential HTTP calls above).
 	.num_bsd_sessions = 16,
 	.bsd_service_type = BsdServiceType_User,
 };
