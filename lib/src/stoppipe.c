@@ -29,13 +29,25 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 	// struct sockaddr_in addr;
 	int addr_size = sizeof(stop_pipe->addr);
 
-	// Confirmed on-device this can fail with ENOBUFS even on the very first
-	// UDP socket this app ever opens - a real shortfall in the shared socket
-	// buffer pool (see g_chiakiSocketInitConfig.sb_efficiency, switch/src/
-	// main.cpp), not a transient release-timing race - so a short retry
-	// alone won't reliably fix it, but it's a cheap, harmless safety net on
-	// top of sizing the pool correctly.
-	const int kMaxSocketAttempts = 5;
+	// Confirmed on-device: doubling sb_efficiency (see g_chiakiSocketInitConfig,
+	// switch/src/main.cpp) from 8 to 16 did NOT fix this, and nxlink/socketInit
+	// still came up fine at that size (if the transfer-memory pool itself had
+	// failed to allocate, initNxLink's socketInitialize would have failed
+	// outright and we'd see zero log output, as happened with
+	// num_bsd_sessions=32). So this isn't the shared buffer pool being too
+	// small. The likelier cause: by the time this runs, the cloud
+	// session-establishment flow has already made 14+ sequential HTTP calls
+	// (client IDs, config, tokens, auth, lock, datacenter select, allocation),
+	// each opening and closing its own TCP socket via a fresh curl handle. If
+	// the bsd sysmodule doesn't reap a closed socket's session slot instantly,
+	// a fast sequential burst can still be mid-teardown when this, the first
+	// UDP socket, tries to open. A 250ms/5-attempt retry window previously
+	// failed identically every time, which only rules out a very short settle
+	// time - widening it here to see if a few seconds of real wall-clock time
+	// lets the session pool recover is the next diagnostic step before
+	// touching num_bsd_sessions again (raising that to 32 broke
+	// socketInitialize()/nxlink outright last time).
+	const int kMaxSocketAttempts = 10;
 	for(int attempt = 0; attempt < kMaxSocketAttempts; attempt++)
 	{
 		errno = 0;
@@ -45,7 +57,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 		printf("[STOP PIPE] socket() failed (attempt %d/%d), errno=%d (%s)\n",
 			attempt + 1, kMaxSocketAttempts, errno, strerror(errno));
 		fflush(stdout);
-		usleep(50000);
+		usleep(300000);
 	}
 	if(stop_pipe->fd < 0)
 		return CHIAKI_ERR_UNKNOWN;
