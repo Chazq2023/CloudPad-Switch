@@ -68,15 +68,21 @@ int Host::InitSession(IO *user)
 
 	chiaki_connect_info.video_profile = this->video_profile;
 	chiaki_connect_info.video_profile_auto_downgrade = true;
-	// Never set before: ChiakiConnectInfo is zero-initialized above, so this
-	// silently stayed at 0.0, which makes congestion_control_thread_func's
-	// "if(packet_loss > packet_loss_max)" clamp fire on ANY nonzero loss and
-	// report exactly 0 lost packets to the server no matter how bad the real
-	// loss actually is - the server's ABR never saw honest feedback, so it
-	// kept re-ramping bitrate straight back into the same wall after every
-	// burst instead of settling down. Android's default for this exact field
-	// is 0.05 (5%), user-adjustable there; matching it here.
-	chiaki_connect_info.packet_loss_max = 0.05;
+	// Was silently 0.0 (see prior commit), then briefly 0.05 to match
+	// Android's default. But packet_loss_max isn't just "the honesty
+	// threshold" - congestion_control_thread_func uses it as a hard CEILING
+	// on what we ever admit to the server: "if(packet_loss > packet_loss_max)
+	// lost = total * packet_loss_max". At 0.05, any time real loss exceeds
+	// 5% (which on a congested Wi-Fi link during motion is most of the
+	// time - confirmed via retest logs showing sustained 40-70% real loss),
+	// we still only ever reported ~5% to the server's ABR, which then has
+	// no reason to back target_bitrate off further than the ~35Mbit it was
+	// observed plateauing at. Since lost <= total always by construction,
+	// the real ratio is already bounded to [0,1] - 1.0 makes this clamp
+	// branch unreachable, so the server always gets the true, uncapped loss
+	// figure and can react (along with video_profile_auto_downgrade above)
+	// to how bad the link genuinely is.
+	chiaki_connect_info.packet_loss_max = 1.0;
 	if (this->IsPS5()) {
 		chiaki_connect_info.video_profile.codec = CHIAKI_CODEC_H265;
 	}
