@@ -2,6 +2,9 @@
 
 #include "views/cloud_game_list.h"
 
+#include <algorithm>
+#include <strings.h>
+
 #include <fmt/format.h>
 
 #include <chiaki/common.h>
@@ -188,6 +191,13 @@ CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string pla
 			}
 		}
 		brls::Application::unblockInputs();
+
+		if(ok)
+		{
+			std::sort(games.begin(), games.end(), [](const CloudGame &a, const CloudGame &b) {
+				return strcasecmp(a.name.c_str(), b.name.c_str()) < 0;
+			});
+		}
 	}
 
 	brls::ListItem *refresh_item = new brls::ListItem("Refresh catalog");

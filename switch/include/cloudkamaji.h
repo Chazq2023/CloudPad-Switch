@@ -55,6 +55,13 @@ class CloudKamaji
 		std::string entitlement_id;
 		std::string streaming_sku;
 		std::string commerce_oauth_token;
+		// Server-authoritative store country/language, from the anon session
+		// response (Step0_5c) - the account's real PSN store region, not
+		// necessarily "US"/"en". Step0_5d's container lookup 404s if queried
+		// under the wrong region for a region-specific catalog SKU (e.g. a
+		// European PS3 disc id), same as upstream's resolvedCountry/resolvedLang.
+		std::string resolved_country;
+		std::string resolved_language;
 
 		bool Step0_5b_GetAnonAuthCode(std::string *out_code, std::string *out_error);
 		bool Step0_5c_CreateAnonSession(const std::string &code, std::string *out_error);

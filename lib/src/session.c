@@ -194,14 +194,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	ChiakiErrorCode err = chiaki_cond_init(&session->state_cond);
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto error;
-		
+	CHIAKI_LOGI(log, "[SESSION INIT] probe: after cond_init");
+
 	err = chiaki_mutex_init(&session->state_mutex, false);
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto error_state_cond;
+	CHIAKI_LOGI(log, "[SESSION INIT] probe: after mutex_init");
 
 	err = chiaki_stop_pipe_init(&session->stop_pipe);
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto error_state_mutex;
+	CHIAKI_LOGI(log, "[SESSION INIT] probe: after stop_pipe_init");
 
 	chiaki_mutex_lock(&session->state_mutex);
 	session->should_stop = false;
@@ -213,6 +216,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	session->login_pin = NULL;
 	session->login_pin_size = 0;
 	chiaki_mutex_unlock(&session->state_mutex);
+	CHIAKI_LOGI(log, "[SESSION INIT] probe: after state field init");
 
 	err = chiaki_ctrl_init(&session->ctrl, session);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -220,6 +224,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 		CHIAKI_LOGE(session->log, "Ctrl init failed");
 		goto error_stop_pipe;
 	}
+	CHIAKI_LOGI(log, "[SESSION INIT] probe: after ctrl_init");
 
 	err = chiaki_stream_connection_init(&session->stream_connection, session, connect_info->packet_loss_max);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -227,10 +232,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 		CHIAKI_LOGE(session->log, "StreamConnection init failed");
 		goto error_ctrl;
 	}
+	CHIAKI_LOGI(log, "[SESSION INIT] probe: after stream_connection_init, service_type=%d", connect_info->service_type);
 
 	// Cloud streaming: use direct connection with pre-provided parameters
 	if(chiaki_service_type_is_cloud(connect_info->service_type))
 	{
+		CHIAKI_LOGI(log, "[SESSION INIT] probe: entered cloud branch");
 		CHIAKI_LOGI(session->log, "=== CLOUD STREAMING INITIALIZATION ===");
 		CHIAKI_LOGI(session->log, "Cloud streaming enabled - using direct connection");
 		CHIAKI_LOGI(session->log, "Host: %s", connect_info->host);

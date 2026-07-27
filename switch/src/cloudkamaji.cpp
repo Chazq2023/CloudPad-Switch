@@ -115,15 +115,46 @@ bool CloudKamaji::Step0_5c_CreateAnonSession(const std::string &code, std::strin
 	}
 
 	this->jsessionid = jsessionid;
+
+	// Capture the account's real PSN store country/language from the session
+	// response body ({"data": {"country": ..., "language": ...}}), so
+	// Step0_5d_ConvertProductId can query the container endpoint under the
+	// right region instead of always assuming US/en - matches upstream's
+	// PSKamajiSession.step0_5c_CreateAnonSession (Qt CloudCatalogBackend
+	// lines 432-440). Best-effort: a missing/unparseable body just leaves the
+	// US/en fallback in place, same as upstream.
+	json_object *root = json_tokener_parse(resp.body.c_str());
+	if(root)
+	{
+		json_object *data = nullptr;
+		if(json_object_object_get_ex(root, "data", &data))
+		{
+			std::string country = JsonGetString(data, "country");
+			std::string language = JsonGetString(data, "language");
+			if(!country.empty() && !language.empty())
+			{
+				this->resolved_country = country;
+				this->resolved_language = language;
+				CHIAKI_LOGI(log, "CloudKamaji: resolved store locale from session: country=%s language=%s",
+					country.c_str(), language.c_str());
+			}
+		}
+		json_object_put(root);
+	}
+
 	return true;
 }
 
 bool CloudKamaji::Step0_5d_ConvertProductId(std::string *out_error)
 {
-	// Locale defaults to en-US, matching the upstream fallback used when no
-	// per-account language preference is configured.
-	std::string country = "US";
-	std::string language = "en";
+	// Prefer the server-authoritative store locale captured in
+	// Step0_5c_CreateAnonSession over a hardcoded default - querying under
+	// the wrong region 404s for region-specific catalog SKUs (confirmed
+	// against a European PS3 disc id "EP0102-BLES01227_00-..." 404ing under
+	// a hardcoded US/en path). Falls back to en-US when the session response
+	// didn't carry a locale, matching upstream's own fallback.
+	std::string country = !resolved_country.empty() ? resolved_country : "US";
+	std::string language = !resolved_language.empty() ? resolved_language : "en";
 
 	std::string url = "https://psnow.playstation.com/store/api/pcnow/00_09_000/container/" +
 		country + "/" + language + "/19/" + product_id + "?useOffers=true&gkb=1&gkb2=1";
@@ -139,13 +170,10 @@ bool CloudKamaji::Step0_5d_ConvertProductId(std::string *out_error)
 
 	if(resp.status != 200)
 	{
-		// Temporary diagnostics: this endpoint 404s for at least some real
-		// PSNOW catalog product ids, and it's not yet clear whether that's a
-		// locale mismatch (country/language above are hardcoded to US/en
-		// rather than the account's real locale), a PS3-specific id-namespace
-		// issue, or something else - log the exact request and Sony's raw
-		// response body so the next real attempt shows what's actually wrong
-		// instead of guessing.
+		// Diagnostics: log the exact request (country/language included in
+		// url above) and Sony's raw response body, in case a title still
+		// 404s for a reason other than the region mismatch this function now
+		// resolves against the account's real store locale.
 		CHIAKI_LOGE(log, "CloudKamaji: container lookup failed (HTTP %ld) url=%s body=%s",
 			resp.status, url.c_str(), resp.body.c_str());
 
