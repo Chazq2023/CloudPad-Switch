@@ -29,6 +29,7 @@ typedef struct senkusha_t
 	uint32_t mtu_id;
 	int protocol_version; // Protocol version to use (7 for Remote Play, 9/12 for Cloud)
 	char *cloud_launch_spec; // For cloud mode: session key (x-gaikai-session) to use in BIG message launch_spec
+	bool skip_mtu_test; // If true, chiaki_senkusha_run only measures RTT and skips the MTU in/out sub-tests entirely
 
 	size_t sent_big_size;           // size of the protobuf BIG we sent (for echo buffer sizing)
 	uint8_t *echo_reassembly_buf;   // accumulates echoed BANG fragments from server

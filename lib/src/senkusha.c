@@ -92,6 +92,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_init(ChiakiSenkusha *senkusha, Chi
 	senkusha->pong_time_us = 0;
 	senkusha->protocol_version = 0; // 0 means "not set, use default based on session"
 	senkusha->cloud_launch_spec = NULL; // NULL means "not set, use empty string"
+	senkusha->skip_mtu_test = false;
 	senkusha->sent_big_size = 0;
 	senkusha->echo_reassembly_buf = NULL;
 	senkusha->echo_reassembly_pos = 0;
@@ -309,6 +310,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 			CHIAKI_LOGE(senkusha->log, "Senkusha Ping Test failed");
 			goto disconnect;
 		}
+	}
+
+	if(senkusha->skip_mtu_test)
+	{
+		CHIAKI_LOGI(senkusha->log, "Senkusha skipping MTU test (RTT-only mode)");
+		goto disconnect;
 	}
 
 	uint64_t mtu_timeout_ms = (*rtt_us * 5) / 1000;

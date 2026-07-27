@@ -142,6 +142,11 @@ namespace
 		}
 
 		senkusha.protocol_version = 9;
+		// RTT only - the MTU sub-test isn't needed since we already use a
+		// fixed, conservative MTU (see the mtu_in/mtu_out constants below),
+		// and skipping it exercises less of the connect/teardown path per
+		// datacenter pinged.
+		senkusha.skip_mtu_test = true;
 		senkusha.cloud_launch_spec = (char *)malloc(session_key.size() + 1);
 		if(!senkusha.cloud_launch_spec)
 		{
@@ -170,8 +175,10 @@ namespace
 		}
 
 		*out_rtt_us = rtt_us;
-		*out_mtu_in = mtu_in;
-		*out_mtu_out = mtu_out;
+		// mtu_in/mtu_out are left unset by senkusha_run when skip_mtu_test is
+		// true - use the same conservative fixed value the fallback path uses.
+		*out_mtu_in = 1200;
+		*out_mtu_out = 1200;
 		return true;
 	}
 }
