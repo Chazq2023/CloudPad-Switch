@@ -10,6 +10,12 @@
 
 #ifdef __SWITCH__
 #include <switch.h>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 #else
 bool appletMainLoop()
 {
@@ -72,6 +78,41 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 };
 #endif // __SWITCH__
 
+#ifdef __SWITCH__
+// Diagnostic only: establishes the actual starting socket budget right after
+// nxlink comes up, before any of the app's own HTTP code runs. On-device,
+// the throwaway-socket probe inside a cloud stream launch (switch/src/
+// cloudhttp.cpp) already showed 0/20 succeeding after just the FIRST
+// HttpRequest call of that launch attempt - meaning something earlier in the
+// same app session (login, catalog browsing/pagination) had already
+// exhausted the budget before the launch flow even began. This runs at boot,
+// before any of that, to see whether the budget starts full (~16) or is
+// already suspiciously low from something in app init itself (e.g. nxlink's
+// own permanently-open debug socket).
+static void ProbeSocketBudgetAtBoot()
+{
+	int successes = 0;
+	int fds[20];
+	for(int i = 0; i < 20; i++)
+	{
+		errno = 0;
+		fds[i] = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if(fds[i] < 0)
+		{
+			printf("[BOOT PROBE] throwaway socket() failed at iteration %d/20, errno=%d (%s)\n",
+				i + 1, errno, strerror(errno));
+			fflush(stdout);
+			break;
+		}
+		successes++;
+	}
+	printf("[BOOT PROBE] %d/20 throwaway sockets opened successfully at boot (closing them all now)\n", successes);
+	fflush(stdout);
+	for(int i = 0; i < successes; i++)
+		close(fds[i]);
+}
+#endif // __SWITCH__
+
 #ifdef CHIAKI_ENABLE_SWITCH_NXLINK
 static int s_nxlinkSock = -1;
 
@@ -90,6 +131,7 @@ static void initNxLink()
 		// otherwise crash diagnostics over this link are unreliable.
 		setvbuf(stdout, NULL, _IONBF, 0);
 		printf("initNxLink\n");
+		ProbeSocketBudgetAtBoot();
 	}
 	else
 		socketExit();
