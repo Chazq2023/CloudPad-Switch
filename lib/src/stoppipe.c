@@ -88,6 +88,20 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 		fflush(stdout);
 		return CHIAKI_ERR_UNKNOWN;
 	}
+	// This socket only ever carries a few bytes of local loopback wakeup
+	// signal, never real network traffic - but it still claims the full
+	// default udp_rx_buf_size (currently 1MB) at creation like every other
+	// UDP socket, same as Takion's real data socket. With 3 of these plus
+	// Takion all competing for whatever the platform's real shared ceiling
+	// is (2MB broke socket creation outright with just 2 sockets open at
+	// boot), shrinking this one down to what it actually needs may free
+	// real headroom for Takion's own receive buffer.
+	{
+		const int stop_pipe_buf_size = 2048;
+		setsockopt(stop_pipe->fd, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&stop_pipe_buf_size, sizeof(stop_pipe_buf_size));
+		setsockopt(stop_pipe->fd, SOL_SOCKET, SO_SNDBUF, (const CHIAKI_SOCKET_BUF_TYPE)&stop_pipe_buf_size, sizeof(stop_pipe_buf_size));
+	}
+
 	stop_pipe->addr.sin_family = AF_INET;
 	// bind to localhost
 	stop_pipe->addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
