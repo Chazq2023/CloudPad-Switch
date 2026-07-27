@@ -29,25 +29,25 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 	// struct sockaddr_in addr;
 	int addr_size = sizeof(stop_pipe->addr);
 
-	// Confirmed on-device: doubling sb_efficiency (see g_chiakiSocketInitConfig,
-	// switch/src/main.cpp) from 8 to 16 did NOT fix this, and nxlink/socketInit
-	// still came up fine at that size (if the transfer-memory pool itself had
-	// failed to allocate, initNxLink's socketInitialize would have failed
-	// outright and we'd see zero log output, as happened with
-	// num_bsd_sessions=32). So this isn't the shared buffer pool being too
-	// small. The likelier cause: by the time this runs, the cloud
-	// session-establishment flow has already made 14+ sequential HTTP calls
-	// (client IDs, config, tokens, auth, lock, datacenter select, allocation),
-	// each opening and closing its own TCP socket via a fresh curl handle. If
-	// the bsd sysmodule doesn't reap a closed socket's session slot instantly,
-	// a fast sequential burst can still be mid-teardown when this, the first
-	// UDP socket, tries to open. A 250ms/5-attempt retry window previously
-	// failed identically every time, which only rules out a very short settle
-	// time - widening it here to see if a few seconds of real wall-clock time
-	// lets the session pool recover is the next diagnostic step before
-	// touching num_bsd_sessions again (raising that to 32 broke
-	// socketInitialize()/nxlink outright last time).
-	const int kMaxSocketAttempts = 10;
+	// Confirmed on-device across several rounds: sb_efficiency (buffer bytes)
+	// doubled from 8 to 16 with zero effect; the retry window widened to 3
+	// real seconds with zero effect (rules out a settling-time race); and
+	// num_bsd_sessions raised to 18/20/24/32 all broke socketInitialize()/
+	// nxlinkStdio() outright (total log silence) - 16 is the hard ceiling on
+	// this device/firmware, so this can't be fixed by raising the session
+	// budget either. The remaining explanation is a real leak: cloud session
+	// establishment makes 14+ sequential HTTP calls (client IDs, config,
+	// tokens, auth, lock, datacenter select, allocation) before this, the
+	// app's first-ever UDP socket, tries to open - if each one leaves behind a
+	// BSD session slot that's never reclaimed on close(), 14+ calls against a
+	// budget of 16 explains the exhaustion exactly. Keeping a small retry as
+	// a harmless safety net, then falling into a diagnostic probe below if it
+	// still fails: opening and immediately closing a throwaway socket in a
+	// loop tells us whether close() actually frees a slot at all (if it does,
+	// every throwaway attempt should succeed since each is closed before the
+	// next opens; if none succeed, the exhaustion is total and permanent by
+	// this point, not something a session-budget bump could ever outrun).
+	const int kMaxSocketAttempts = 3;
 	for(int attempt = 0; attempt < kMaxSocketAttempts; attempt++)
 	{
 		errno = 0;
@@ -57,10 +57,37 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 		printf("[STOP PIPE] socket() failed (attempt %d/%d), errno=%d (%s)\n",
 			attempt + 1, kMaxSocketAttempts, errno, strerror(errno));
 		fflush(stdout);
-		usleep(300000);
+		usleep(100000);
 	}
 	if(stop_pipe->fd < 0)
+	{
+		// Diagnostic only: probe whether close() actually reclaims a session
+		// slot. Each iteration opens then immediately closes a throwaway UDP
+		// socket - if slots are reclaimed properly, every iteration should
+		// succeed; a failure here (especially on the very first iteration)
+		// means the exhaustion is total, not something more retries or a
+		// higher num_bsd_sessions could ever fix.
+		const int kProbeCount = 20;
+		int probe_successes = 0;
+		for(int i = 0; i < kProbeCount; i++)
+		{
+			errno = 0;
+			int probe_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+			if(probe_fd < 0)
+			{
+				printf("[STOP PIPE PROBE] throwaway socket() failed at iteration %d/%d, errno=%d (%s)\n",
+					i + 1, kProbeCount, errno, strerror(errno));
+				fflush(stdout);
+				break;
+			}
+			probe_successes++;
+			close(probe_fd);
+		}
+		printf("[STOP PIPE PROBE] %d/%d throwaway open+close cycles succeeded before failure\n",
+			probe_successes, kProbeCount);
+		fflush(stdout);
 		return CHIAKI_ERR_UNKNOWN;
+	}
 	stop_pipe->addr.sin_family = AF_INET;
 	// bind to localhost
 	stop_pipe->addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);

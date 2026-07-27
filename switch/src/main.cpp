@@ -60,13 +60,14 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	// spread across 3 real seconds (see lib/src/stoppipe.c) - not a timing
 	// race, a hard/permanent exhaustion. Since sb_efficiency (buffer bytes)
 	// provably isn't it, and nothing leaks a client-side fd, the remaining
-	// candidate is this session budget itself: 16 is proven insufficient. 20,
-	// 24 and 32 all broke socketInitialize()/nxlinkStdio() outright (total
-	// silence, no logs at all), so the hard ceiling sits strictly between 16
-	// and 20. Bisecting to 18 as the next untested value - if this also
-	// breaks it, 16 is the real cap and the fix has to be on the leak side
-	// instead (see the comment on the 14+ sequential HTTP calls above).
-	.num_bsd_sessions = 18,
+	// candidate is this session budget itself: 16 is proven insufficient. 18,
+	// 20, 24 and 32 all broke socketInitialize()/nxlinkStdio() outright (total
+	// silence, no logs at all), so the hard ceiling on this device/firmware is
+	// 16 - going any higher isn't viable at all, let alone enough headroom.
+	// Back to the known-safe 16; the fix has to be on the leak side instead
+	// (see lib/src/stoppipe.c's diagnostic probe, and the comment on the 14+
+	// sequential HTTP calls above).
+	.num_bsd_sessions = 16,
 	.bsd_service_type = BsdServiceType_User,
 };
 #endif // __SWITCH__
