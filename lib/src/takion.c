@@ -1208,6 +1208,9 @@ static void *takion_packet_process_thread_func(void *user)
 static void *takion_thread_func(void *user)
 {
 	ChiakiTakion *takion = user;
+#ifdef __SWITCH__
+	chiaki_switch_log_resource_limits("takion_thread_func start");
+#endif
 
 	uint32_t seq_num_remote_initial;
 	if(takion_handshake(takion, &seq_num_remote_initial) != CHIAKI_ERR_SUCCESS)
@@ -1325,6 +1328,9 @@ static void *takion_thread_func(void *user)
 	}
 	takion->packet_process_queue_tail = NULL;
 	printf("[TAKION SHUTDOWN] probe: queue drained\n"); fflush(stdout);
+#ifdef __SWITCH__
+	chiaki_switch_log_resource_limits("takion_thread_func before send_buffer stop");
+#endif
 	// packet_process_mutex/cond are NOT finalized here even though the
 	// thread has logically finished (packet_process_thread_done true) -
 	// same underlying issue as the join itself (see the

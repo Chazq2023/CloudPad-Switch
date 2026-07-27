@@ -33,6 +33,28 @@ int64_t get_thread_limit()
 	//printf("thread_cur_value: %lu, thread_lim_value: %lu\n", thread_cur_value, thread_lim_value);
 	return thread_lim_value - thread_cur_value;
 }
+
+void chiaki_switch_log_resource_limits(const char *tag)
+{
+	uint64_t h = INVALID_HANDLE;
+	svcGetInfo(&h, InfoType_ResourceLimit, INVALID_HANDLE, 0);
+	static const struct { LimitableResource res; const char *name; } resources[] = {
+		{ LimitableResource_Threads, "Threads" },
+		{ LimitableResource_Events, "Events" },
+		{ LimitableResource_TransferMemories, "TransferMemory" },
+		{ LimitableResource_Sessions, "Sessions" },
+	};
+	printf("[RESOURCE LIMITS] %s:", tag);
+	for(size_t i = 0; i < sizeof(resources)/sizeof(resources[0]); i++)
+	{
+		int64_t cur = 0, lim = 0;
+		svcGetResourceLimitCurrentValue(&cur, h, resources[i].res);
+		svcGetResourceLimitLimitValue(&lim, h, resources[i].res);
+		printf(" %s=%lld/%lld", resources[i].name, (long long)cur, (long long)lim);
+	}
+	printf("\n");
+	fflush(stdout);
+}
 #endif
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_create(ChiakiThread *thread, ChiakiThreadFunc func, void *arg)

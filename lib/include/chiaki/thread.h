@@ -37,6 +37,15 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_join(ChiakiThread *thread, void **re
 CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_timedjoin(ChiakiThread *thread, void **retval, uint64_t timeout_ms);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_set_name(ChiakiThread *thread, const char *name);
 
+#ifdef __SWITCH__
+// Diagnostic only: logs current/limit for the kernel resource limit
+// categories homebrew commonly runs out of (threads, events, sessions,
+// transfer memory), via a raw printf so it shows up over nxlink regardless
+// of chiaki log level. tag is printed alongside so multiple call sites are
+// distinguishable in the log.
+void chiaki_switch_log_resource_limits(const char *tag);
+#endif
+
 
 typedef struct chiaki_mutex_t
 {
