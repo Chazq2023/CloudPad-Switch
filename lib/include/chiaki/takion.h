@@ -201,6 +201,22 @@ typedef struct chiaki_takion_t
 	ChiakiCond packet_process_cond;
 	ChiakiThread packet_process_thread;
 	bool packet_process_thread_running;
+	bool packet_process_thread_created;
+	// Set by the packet-process thread itself right before it returns, and
+	// waited on (via packet_process_cond) by the recv thread instead of
+	// calling chiaki_thread_join on it directly. The actual pthread_join
+	// happens later, in chiaki_takion_close, from whatever non-nested
+	// caller thread originally called chiaki_takion_connect - not from the
+	// recv thread, which is itself a chiaki_thread_create'd worker. A
+	// worker thread joining another worker thread it spawned is a pattern
+	// that never existed anywhere else in this codebase before the
+	// recv/packet-process split, and reproducibly crashes on Switch: seen
+	// on-device as the packet-process thread completing and returning
+	// cleanly, immediately followed by a silent crash purely inside the
+	// recv thread's own chiaki_thread_join call on it - consistent with
+	// Horizon OS's thread/handle model not supporting cross-worker joins
+	// the way generic pthread_join implies.
+	bool packet_process_thread_done;
 } ChiakiTakion;
 
 

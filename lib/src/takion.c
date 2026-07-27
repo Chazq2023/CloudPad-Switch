@@ -247,6 +247,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 	}
 
 	takion->gkcrypt_local = NULL;
+	takion->packet_process_thread_created = false;
+	takion->packet_process_thread_done = false;
 	ret = chiaki_mutex_init(&takion->gkcrypt_local_mutex, true);
 	if(ret != CHIAKI_ERR_SUCCESS)
 		return ret;
@@ -544,6 +546,18 @@ CHIAKI_EXPORT void chiaki_takion_close(ChiakiTakion *takion)
 	printf("[TAKION CLOSE] probe: before thread join\n"); fflush(stdout);
 	chiaki_thread_join(&takion->thread, NULL);
 	printf("[TAKION CLOSE] probe: after thread join\n"); fflush(stdout);
+	// The actual pthread_join for the packet-process thread happens here,
+	// not inside the recv thread itself - see the packet_process_thread_done
+	// comment in takion.h for why. By this point takion->thread (which
+	// waited for packet_process_thread_done before returning) has already
+	// confirmed the packet-process thread finished, so this join is on an
+	// already-exited thread and should return immediately.
+	if(takion->packet_process_thread_created)
+	{
+		printf("[TAKION CLOSE] probe: before packet_process_thread join\n"); fflush(stdout);
+		chiaki_thread_join(&takion->packet_process_thread, NULL);
+		printf("[TAKION CLOSE] probe: after packet_process_thread join\n"); fflush(stdout);
+	}
 	chiaki_stop_pipe_fini(&takion->stop_pipe);
 	printf("[TAKION CLOSE] probe: after stop_pipe_fini\n"); fflush(stdout);
 	chiaki_mutex_fini(&takion->seq_num_local_mutex);
@@ -1167,6 +1181,8 @@ static void *takion_packet_process_thread_func(void *user)
 
 		chiaki_mutex_lock(&takion->packet_process_mutex);
 	}
+	takion->packet_process_thread_done = true;
+	chiaki_cond_broadcast(&takion->packet_process_cond);
 	chiaki_mutex_unlock(&takion->packet_process_mutex);
 	printf("[PKT THREAD] probe: returning\n"); fflush(stdout);
 	return NULL;
@@ -1197,8 +1213,10 @@ static void *takion_thread_func(void *user)
 	takion->packet_process_queue_tail = NULL;
 	takion->packet_process_queue_count = 0;
 	takion->packet_process_thread_running = true;
+	takion->packet_process_thread_done = false;
 	if(chiaki_thread_create(&takion->packet_process_thread, takion_packet_process_thread_func, takion) != CHIAKI_ERR_SUCCESS)
 		goto error_packet_process_cond;
+	takion->packet_process_thread_created = true;
 	chiaki_thread_set_name(&takion->packet_process_thread, "Chiaki Takion Packet Process");
 
 	if(takion->cb)
@@ -1265,11 +1283,20 @@ static void *takion_thread_func(void *user)
 	printf("[TAKION SHUTDOWN] probe: recv loop exited, stopping packet process thread\n"); fflush(stdout);
 	chiaki_mutex_lock(&takion->packet_process_mutex);
 	takion->packet_process_thread_running = false;
-	chiaki_mutex_unlock(&takion->packet_process_mutex);
 	chiaki_cond_signal(&takion->packet_process_cond);
-	printf("[TAKION SHUTDOWN] probe: before packet_process_thread join\n"); fflush(stdout);
-	chiaki_thread_join(&takion->packet_process_thread, NULL);
-	printf("[TAKION SHUTDOWN] probe: after packet_process_thread join\n"); fflush(stdout);
+	printf("[TAKION SHUTDOWN] probe: before waiting for packet_process_thread_done\n"); fflush(stdout);
+	// Wait for the packet-process thread to confirm it's finished via the
+	// existing condvar, rather than calling chiaki_thread_join on it from
+	// here - this recv thread is itself a chiaki_thread_create'd worker,
+	// and a worker joining another worker it spawned is what crashed
+	// on-device (see the packet_process_thread_done comment in takion.h).
+	// The real pthread_join happens later in chiaki_takion_close, called
+	// from whatever non-nested thread originally called
+	// chiaki_takion_connect.
+	while(!takion->packet_process_thread_done)
+		chiaki_cond_wait(&takion->packet_process_cond, &takion->packet_process_mutex);
+	chiaki_mutex_unlock(&takion->packet_process_mutex);
+	printf("[TAKION SHUTDOWN] probe: packet_process_thread confirmed done\n"); fflush(stdout);
 
 	while(takion->packet_process_queue_head)
 	{
