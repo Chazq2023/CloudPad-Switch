@@ -8,6 +8,7 @@
 
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
 
 #define TAKION_DATA_RESEND_TIMEOUT_MS 200
 #define TAKION_DATA_RESEND_WAKEUP_TIMEOUT_MS (TAKION_DATA_RESEND_TIMEOUT_MS/2)
@@ -68,8 +69,11 @@ error_packets:
 
 CHIAKI_EXPORT void chiaki_takion_send_buffer_request_stop(ChiakiTakionSendBuffer *send_buffer)
 {
+	printf("[SEND BUFFER] probe: request_stop entry, send_buffer=%p\n", (void *)send_buffer); fflush(stdout);
 	send_buffer->should_stop = true;
+	printf("[SEND BUFFER] probe: should_stop set, about to signal cond=%p\n", (void *)&send_buffer->cond); fflush(stdout);
 	ChiakiErrorCode err = chiaki_cond_signal(&send_buffer->cond);
+	printf("[SEND BUFFER] probe: cond signaled, err=%d\n", (int)err); fflush(stdout);
 	assert(err == CHIAKI_ERR_SUCCESS);
 	(void)err;
 }

@@ -1350,6 +1350,7 @@ error_send_buffer:
 	// chiaki_takion_close. Reached both on normal shutdown and on early
 	// setup failure after send_buffer_created was set, so it must be safe
 	// unconditionally here.
+	printf("[TAKION SHUTDOWN] probe: send_buffer_created=%d\n", (int)takion->send_buffer_created); fflush(stdout);
 	if(takion->send_buffer_created)
 		chiaki_takion_send_buffer_request_stop(&takion->send_buffer);
 	printf("[TAKION SHUTDOWN] probe: after send_buffer stop request\n"); fflush(stdout);
