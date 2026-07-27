@@ -66,10 +66,14 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	// buffer starvation. Trying 0x200000 (2MB) as a bigger step - still
 	// comfortably short of the 5MB that broke the connection outright with
 	// only 2 sockets open, but there are now 4 concurrent UDP sockets at
-	// streaming time (3 persistent stop-pipes + Takion's own), so this is a
-	// real risk of reintroducing that failure and needs to be verified.
+	// streaming time (3 persistent stop-pipes + Takion's own). Confirmed
+	// on-device: 0x200000 (2MB) broke it immediately, failing at the very
+	// first boot-time throwaway socket - before any other UDP socket besides
+	// this one and nxlink's own TCP connection even exists - so the ceiling
+	// for a single UDP socket's default reservation sits strictly between
+	// 512KB (worked) and 2MB (failed outright). Bisecting down to 1MB.
 	.udp_tx_buf_size = 0x10000,
-	.udp_rx_buf_size = 0x200000, // 2MB
+	.udp_rx_buf_size = 0x100000, // 1MB
 
 	.sb_efficiency = 16,
 
