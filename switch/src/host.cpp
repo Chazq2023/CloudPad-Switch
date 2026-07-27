@@ -68,6 +68,15 @@ int Host::InitSession(IO *user)
 
 	chiaki_connect_info.video_profile = this->video_profile;
 	chiaki_connect_info.video_profile_auto_downgrade = true;
+	// Never set before: ChiakiConnectInfo is zero-initialized above, so this
+	// silently stayed at 0.0, which makes congestion_control_thread_func's
+	// "if(packet_loss > packet_loss_max)" clamp fire on ANY nonzero loss and
+	// report exactly 0 lost packets to the server no matter how bad the real
+	// loss actually is - the server's ABR never saw honest feedback, so it
+	// kept re-ramping bitrate straight back into the same wall after every
+	// burst instead of settling down. Android's default for this exact field
+	// is 0.05 (5%), user-adjustable there; matching it here.
+	chiaki_connect_info.packet_loss_max = 0.05;
 	if (this->IsPS5()) {
 		chiaki_connect_info.video_profile.codec = CHIAKI_CODEC_H265;
 	}
