@@ -41,21 +41,29 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	.udp_tx_buf_size = 0x40000,
 	.udp_rx_buf_size = 0x500000, // 5MB: 4MB required + headroom
 
-	// The actual shared socket-buffer pool libnx reserves via tmemCreate() is
-	// sb_efficiency * (tcp_tx_buf_max_size + tcp_rx_buf_max_size +
-	// udp_tx_buf_size + udp_rx_buf_size) - this is the real lever for "how
-	// much total buffer space exists," not num_bsd_sessions (that's a
-	// separate IPC-session-handle limit; raising it to 32 broke
-	// socketInitialize()/nxlinkStdio() outright instead of helping, so it's
-	// back at the known-working 16 below). Confirmed on-device that even the
-	// very first, otherwise-idle UDP socket this app ever opens (chiaki_
-	// session_init's own stop-pipe, lib/src/stoppipe.c) fails outright with
-	// ENOBUFS at sb_efficiency=8 - consistently across a 5x/50ms retry, so
-	// it's a real capacity shortfall, not a transient release-timing race.
-	// Doubled to give real headroom against the udp_rx_buf_size bump above.
+	// The shared socket-buffer pool size is sb_efficiency * (tcp_tx_buf_max_size
+	// + tcp_rx_buf_max_size + udp_tx_buf_size + udp_rx_buf_size). Doubling this
+	// from 8 to 16 was tried on-device and made zero difference to the
+	// stop-pipe ENOBUFS failure below (identical errno=105 every attempt, and
+	// nxlink/socketInitialize still came up fine at this size, which it would
+	// NOT have if tmemCreate() itself had failed to allocate the pool) - so
+	// buffer bytes are not the actual constraint here. Left doubled anyway
+	// since it's proven harmless and gives real headroom for the
+	// udp_rx_buf_size bump above.
 	.sb_efficiency = 16,
 
-	.num_bsd_sessions = 16,
+	// Cloud session establishment makes 14+ sequential HTTP calls (client IDs,
+	// config, tokens, auth, lock, datacenter select, allocation), each via its
+	// own curl_easy_init/cleanup pair - closed properly on the client side. By
+	// the time chiaki_stop_pipe_init opens this app's first-ever UDP socket
+	// right after, it fails with ENOBUFS on every one of 10 retry attempts
+	// spread across 3 real seconds (see lib/src/stoppipe.c) - not a timing
+	// race, a hard/permanent exhaustion. Since sb_efficiency (buffer bytes)
+	// provably isn't it, and nothing leaks a client-side fd, the remaining
+	// candidate is this session budget itself: 16 is proven insufficient, 32
+	// broke socketInitialize()/nxlinkStdio() outright (total silence, no logs
+	// at all). Bisecting to 24 as the next untested value between those two.
+	.num_bsd_sessions = 24,
 	.bsd_service_type = BsdServiceType_User,
 };
 #endif // __SWITCH__
