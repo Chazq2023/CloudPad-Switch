@@ -278,9 +278,13 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 		int r = setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_val, sizeof(rcvbuf_val));
 		if(r < 0)
 		{
-			CHIAKI_LOGE(takion->log, "Takion failed to setsockopt SO_RCVBUF: " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
-			ret = CHIAKI_ERR_NETWORK;
-			goto error_sock;
+			// Switch UDP sockets get a fixed buffer size at creation (via
+			// g_chiakiSocketInitConfig.udp_rx_buf_size, switch/src/main.cpp) and
+			// can't grow past it - unlike other platforms, this isn't recoverable
+			// by asking for less, and treating it as fatal blocks the whole
+			// stream even though a smaller receive buffer just means more risk
+			// of packet loss under bursty load, not an unusable connection.
+			CHIAKI_LOGW(takion->log, "Takion failed to setsockopt SO_RCVBUF (continuing with default buffer size): " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
 		}
 
 		int actual_rcvbuf = 0;
@@ -386,9 +390,13 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 		int r = setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_val, sizeof(rcvbuf_val));
 		if(r < 0)
 		{
-			CHIAKI_LOGE(takion->log, "Takion failed to setsockopt SO_RCVBUF: " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
-			ret = CHIAKI_ERR_NETWORK;
-			goto error_sock;
+			// Switch UDP sockets get a fixed buffer size at creation (via
+			// g_chiakiSocketInitConfig.udp_rx_buf_size, switch/src/main.cpp) and
+			// can't grow past it - unlike other platforms, this isn't recoverable
+			// by asking for less, and treating it as fatal blocks the whole
+			// stream even though a smaller receive buffer just means more risk
+			// of packet loss under bursty load, not an unusable connection.
+			CHIAKI_LOGW(takion->log, "Takion failed to setsockopt SO_RCVBUF (continuing with default buffer size): " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
 		}
 		int actual_rcvbuf = 0;
 		socklen_t actual_rcvbuf_len = sizeof(actual_rcvbuf);
