@@ -66,12 +66,18 @@ error_packets:
 	return err;
 }
 
-CHIAKI_EXPORT void chiaki_takion_send_buffer_fini(ChiakiTakionSendBuffer *send_buffer)
+CHIAKI_EXPORT void chiaki_takion_send_buffer_request_stop(ChiakiTakionSendBuffer *send_buffer)
 {
 	send_buffer->should_stop = true;
 	ChiakiErrorCode err = chiaki_cond_signal(&send_buffer->cond);
 	assert(err == CHIAKI_ERR_SUCCESS);
-	err = chiaki_thread_join(&send_buffer->thread, NULL);
+	(void)err;
+}
+
+CHIAKI_EXPORT void chiaki_takion_send_buffer_fini(ChiakiTakionSendBuffer *send_buffer)
+{
+	chiaki_takion_send_buffer_request_stop(send_buffer);
+	ChiakiErrorCode err = chiaki_thread_join(&send_buffer->thread, NULL);
 	assert(err == CHIAKI_ERR_SUCCESS);
 
 	for(size_t i=0; i<send_buffer->packets_count; i++)

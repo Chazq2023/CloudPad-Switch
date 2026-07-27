@@ -41,6 +41,14 @@ typedef struct chiaki_takion_send_buffer_t
  * @param size number of packet slots
  */
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_init(ChiakiTakionSendBuffer *send_buffer, ChiakiTakion *takion, size_t size);
+/**
+ * Signal the send buffer thread to stop, without joining it or finalizing
+ * anything. Safe to call from any thread, including a thread that is
+ * itself a chiaki_thread_create'd worker - unlike chiaki_takion_send_buffer_fini,
+ * which joins the thread and must only be called from a non-nested caller
+ * (see the packet_process_thread_done comment in takion.h for why).
+ */
+CHIAKI_EXPORT void chiaki_takion_send_buffer_request_stop(ChiakiTakionSendBuffer *send_buffer);
 CHIAKI_EXPORT void chiaki_takion_send_buffer_fini(ChiakiTakionSendBuffer *send_buffer);
 
 /**

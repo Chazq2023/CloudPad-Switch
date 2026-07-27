@@ -217,6 +217,16 @@ typedef struct chiaki_takion_t
 	// Horizon OS's thread/handle model not supporting cross-worker joins
 	// the way generic pthread_join implies.
 	bool packet_process_thread_done;
+
+	// Same deferred-join issue as packet_process_thread_done above, but for
+	// the pre-existing send_buffer's own dedicated thread (takionsendbuffer.c)
+	// - a real, older bug in this codebase that simply never got exercised
+	// before, since it also requires a clean chiaki_takion_close from a
+	// non-nested caller to trigger. True once chiaki_takion_send_buffer_init
+	// has succeeded, so chiaki_takion_close knows whether there's anything
+	// to finalize (it may never have been reached if the handshake itself
+	// failed first).
+	bool send_buffer_created;
 } ChiakiTakion;
 
 

@@ -249,6 +249,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 	takion->gkcrypt_local = NULL;
 	takion->packet_process_thread_created = false;
 	takion->packet_process_thread_done = false;
+	takion->send_buffer_created = false;
 	ret = chiaki_mutex_init(&takion->gkcrypt_local_mutex, true);
 	if(ret != CHIAKI_ERR_SUCCESS)
 		return ret;
@@ -563,6 +564,16 @@ CHIAKI_EXPORT void chiaki_takion_close(ChiakiTakion *takion)
 		chiaki_cond_fini(&takion->packet_process_cond);
 		chiaki_mutex_fini(&takion->packet_process_mutex);
 		printf("[TAKION CLOSE] probe: after packet_process_cond/mutex fini\n"); fflush(stdout);
+	}
+	// Same deferred-reap pattern for send_buffer's own (pre-existing, older)
+	// thread - see the send_buffer_created comment in takion.h. Only a
+	// stop was requested from the recv thread's own shutdown; the actual
+	// join + cond/mutex fini happens here, from this non-nested caller.
+	if(takion->send_buffer_created)
+	{
+		printf("[TAKION CLOSE] probe: before send_buffer fini\n"); fflush(stdout);
+		chiaki_takion_send_buffer_fini(&takion->send_buffer);
+		printf("[TAKION CLOSE] probe: after send_buffer fini\n"); fflush(stdout);
 	}
 	chiaki_stop_pipe_fini(&takion->stop_pipe);
 	printf("[TAKION CLOSE] probe: after stop_pipe_fini\n"); fflush(stdout);
@@ -1210,6 +1221,7 @@ static void *takion_thread_func(void *user)
 	// The send buffer size MUST be consistent with the acked seqnums array size in takion_handle_packet_message_data_ack()
 	if(chiaki_takion_send_buffer_init(&takion->send_buffer, takion, TAKION_SEND_BUFFER_SIZE) != CHIAKI_ERR_SUCCESS)
 		goto error_reoder_queue;
+	takion->send_buffer_created = true;
 
 	if(chiaki_mutex_init(&takion->packet_process_mutex, false) != CHIAKI_ERR_SUCCESS)
 		goto error_send_buffer;
@@ -1330,8 +1342,17 @@ error_packet_process_mutex:
 	chiaki_mutex_fini(&takion->packet_process_mutex);
 	printf("[TAKION SHUTDOWN] probe: after packet_process_mutex fini\n"); fflush(stdout);
 error_send_buffer:
-	chiaki_takion_send_buffer_fini(&takion->send_buffer);
-	printf("[TAKION SHUTDOWN] probe: after send_buffer fini\n"); fflush(stdout);
+	// Only requests the send-buffer thread stop, does NOT join it - same
+	// deferred-reap pattern as packet_process_thread_done (see the comment
+	// in takion.h), for the same reason: this is still the recv thread,
+	// itself a nested worker relative to send_buffer's own thread. The
+	// actual chiaki_takion_send_buffer_fini (which joins) happens later in
+	// chiaki_takion_close. Reached both on normal shutdown and on early
+	// setup failure after send_buffer_created was set, so it must be safe
+	// unconditionally here.
+	if(takion->send_buffer_created)
+		chiaki_takion_send_buffer_request_stop(&takion->send_buffer);
+	printf("[TAKION SHUTDOWN] probe: after send_buffer stop request\n"); fflush(stdout);
 
 error_reoder_queue:
 	chiaki_reorder_queue_fini(&takion->data_queue);
