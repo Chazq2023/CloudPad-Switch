@@ -37,34 +37,26 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	.tcp_tx_buf_max_size = 0x40000,
 	.tcp_rx_buf_max_size = 0x40000,
 
-	// Found the actual mechanism by reading libnx's source
-	// (nx/source/services/bsd.c, _bsdGetTransferMemSizeForConfig): the total
-	// transfer memory bsdInitialize() allocates - a SINGLE shared pool backing
-	// every socket for the whole session - is
-	//   sb_efficiency * page_round(tcp_tx_buf_max_size + tcp_rx_buf_max_size
-	//                              + udp_tx_buf_size + udp_rx_buf_size)
-	// sb_efficiency is a CONCURRENCY multiplier (how many sockets can be at
-	// full configured size simultaneously), not a per-socket size booster.
-	// Every earlier round of "raising udp_rx_buf_size breaks socket creation"
-	// (5MB broke it with 2 sockets open, then 2MB broke it too) was really
-	// this total allocation exceeding what a homebrew process's heap can
-	// provide - at the old sb_efficiency=16 the 1MB udp_rx_buf_size already
-	// in use here means ~25MB of transfer memory, for a multiplier (16
-	// concurrent full-size sockets) this app never actually uses: there are
-	// only ever 4 concurrent UDP sockets at streaming time (3 stop-pipes,
-	// now shrunk to 2KB each post-creation via setsockopt in stoppipe.c, plus
-	// Takion's own). Dropping sb_efficiency to 4 (comfortably above the real
-	// count, matching libnx's own stock default) while raising
-	// udp_rx_buf_size to the full 0x400000 (4MB) Takion has always actually
-	// requested (TAKION_A_RWND, lib/src/takion.c) - previously always
-	// silently clamped down to whatever this value was - comes to
-	// 4 * 0x490000 =~ 18.25MB, LESS total memory than the 25MB already
-	// working today. First real test of Takion getting its native buffer
-	// size instead of a clamped-down one.
+	// libnx's bsdInitialize() (nx/source/services/bsd.c,
+	// _bsdGetTransferMemSizeForConfig) sizes its transfer memory pool as
+	// sb_efficiency * sum-of-buffers, which looked like it explained every
+	// earlier "raising udp_rx_buf_size breaks socket creation" result as a
+	// total-memory problem - so this was tried: sb_efficiency 16->4 (this
+	// app only ever has 4 concurrent UDP sockets, not 16) while raising
+	// udp_rx_buf_size to the full 4MB Takion actually wants (TAKION_A_RWND),
+	// for a total LOWER than what already worked (~18.25MB vs ~25MB).
+	// Confirmed on-device this theory is wrong: it broke boot outright
+	// (0/20 throwaway sockets, ENOBUFS on every single HTTP call) despite
+	// using less total memory than the working 1MB config. That rules out
+	// total pool size as the real constraint and confirms the ceiling is on
+	// the individual udp_rx_buf_size value itself, independent of
+	// sb_efficiency - matching the very first bisection done on this buffer
+	// long before the tmem formula was known (512KB worked, 2MB broke it
+	// outright). Reverted to the known-working 1MB/16 pair.
 	.udp_tx_buf_size = 0x10000,
-	.udp_rx_buf_size = 0x400000, // 4MB, matches TAKION_A_RWND
+	.udp_rx_buf_size = 0x100000, // 1MB - confirmed hard ceiling sits below 2MB, independent of sb_efficiency
 
-	.sb_efficiency = 4,
+	.sb_efficiency = 16,
 
 	.num_bsd_sessions = 16,
 	.bsd_service_type = BsdServiceType_User,
