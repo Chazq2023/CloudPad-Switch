@@ -37,45 +37,34 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	.tcp_tx_buf_max_size = 0x40000,
 	.tcp_rx_buf_max_size = 0x40000,
 
-	// A boot-time diagnostic probe (right after nxlink comes up, before any of
-	// the app's own code runs - see ProbeSocketBudgetAtBoot below) proved this
-	// pool is exhausted after the SECOND socket the process ever creates: one
-	// TCP connection (nxlink's own persistent stdout link) plus one throwaway
-	// UDP socket, and the UDP one already fails outright with ENOBUFS. That
-	// ruled out every earlier theory in one shot: it's not a leak across the
-	// cloud session's HTTP calls (fails before any of them run), not a
-	// session-count problem (num_bsd_sessions=16 is nowhere near used up by 2
-	// sockets), and sb_efficiency scaling (8->16, zero measured effect) was
-	// never the real lever - the actual effective pool is evidently far
-	// smaller than the nominal sb_efficiency * sum-of-buffers formula
-	// suggests, likely clamped by the sysmodule itself. udp_rx_buf_size was
-	// 0x500000 (5MB) - sized for Takion's later 4MB SO_RCVBUF requirement
-	// (lib/src/takion.c, TAKION_A_RWND) - but on Switch that default is
-	// reserved for EVERY UDP socket at creation, not just Takion's, so even
-	// this app's trivial loopback stop-pipe signaling socket was demanding 5MB
-	// up front. Against a tiny real pool, nxlink's TCP socket plus one 5MB UDP
-	// reservation was apparently already at or past the edge. Shrinking this
-	// down to 0x10000 unblocked the whole connection flow (confirmed on-device:
-	// full session/Takion handshake succeeded). Bisecting upward from there:
-	// 0x80000 (512KB, confirmed via TAKION_RCVBUF_DETAIL actual=524288, so the
-	// value really does apply) still showed severe FEC failures on nearly
-	// every frame and no usable audio - not obviously better than 64KB despite
-	// 8x the buffer, which points at this being at least partly a real network
-	// throughput/stability limit (measured bitrate on-device swung wildly
-	// between 0.01 and 10 MBit/s against a ~48 Mbit/s target) rather than pure
-	// buffer starvation. Trying 0x200000 (2MB) as a bigger step - still
-	// comfortably short of the 5MB that broke the connection outright with
-	// only 2 sockets open, but there are now 4 concurrent UDP sockets at
-	// streaming time (3 persistent stop-pipes + Takion's own). Confirmed
-	// on-device: 0x200000 (2MB) broke it immediately, failing at the very
-	// first boot-time throwaway socket - before any other UDP socket besides
-	// this one and nxlink's own TCP connection even exists - so the ceiling
-	// for a single UDP socket's default reservation sits strictly between
-	// 512KB (worked) and 2MB (failed outright). Bisecting down to 1MB.
+	// Found the actual mechanism by reading libnx's source
+	// (nx/source/services/bsd.c, _bsdGetTransferMemSizeForConfig): the total
+	// transfer memory bsdInitialize() allocates - a SINGLE shared pool backing
+	// every socket for the whole session - is
+	//   sb_efficiency * page_round(tcp_tx_buf_max_size + tcp_rx_buf_max_size
+	//                              + udp_tx_buf_size + udp_rx_buf_size)
+	// sb_efficiency is a CONCURRENCY multiplier (how many sockets can be at
+	// full configured size simultaneously), not a per-socket size booster.
+	// Every earlier round of "raising udp_rx_buf_size breaks socket creation"
+	// (5MB broke it with 2 sockets open, then 2MB broke it too) was really
+	// this total allocation exceeding what a homebrew process's heap can
+	// provide - at the old sb_efficiency=16 the 1MB udp_rx_buf_size already
+	// in use here means ~25MB of transfer memory, for a multiplier (16
+	// concurrent full-size sockets) this app never actually uses: there are
+	// only ever 4 concurrent UDP sockets at streaming time (3 stop-pipes,
+	// now shrunk to 2KB each post-creation via setsockopt in stoppipe.c, plus
+	// Takion's own). Dropping sb_efficiency to 4 (comfortably above the real
+	// count, matching libnx's own stock default) while raising
+	// udp_rx_buf_size to the full 0x400000 (4MB) Takion has always actually
+	// requested (TAKION_A_RWND, lib/src/takion.c) - previously always
+	// silently clamped down to whatever this value was - comes to
+	// 4 * 0x490000 =~ 18.25MB, LESS total memory than the 25MB already
+	// working today. First real test of Takion getting its native buffer
+	// size instead of a clamped-down one.
 	.udp_tx_buf_size = 0x10000,
-	.udp_rx_buf_size = 0x100000, // 1MB
+	.udp_rx_buf_size = 0x400000, // 4MB, matches TAKION_A_RWND
 
-	.sb_efficiency = 16,
+	.sb_efficiency = 4,
 
 	.num_bsd_sessions = 16,
 	.bsd_service_type = BsdServiceType_User,
