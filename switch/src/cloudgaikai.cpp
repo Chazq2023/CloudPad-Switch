@@ -681,81 +681,33 @@ bool CloudGaikai::Step11_PickDatacenter(std::string *out_error)
 		return false;
 	}
 
-	// Ping every candidate datacenter for real (same chiaki_senkusha_run
-	// echo/ping handshake CloudPad-Android uses in DatacenterPing.kt /
-	// PSGaikaiStreaming.kt Step 12) and pick whichever one actually has the
-	// lowest measured RTT from here, instead of blindly taking whichever
-	// one Sony's API happens to list first. That's exactly the difference
-	// found between this port and CloudPad-Android - Android always does
-	// this real comparison, this port never did, so it could easily have
-	// been landing on a meaningfully worse server/path than Android for
-	// the same user on the same network the whole time. Falls back to the
-	// first-listed datacenter with a conservative guessed MTU only if every
-	// ping fails (matching Android's own fallback path).
+	// Real RTT-based ping-and-pick-best (PingDatacenter, further up this
+	// file) is implemented and reachable from here, but disabled for now:
+	// it reliably reproduces a teardown crash in chiaki_takion_close after
+	// completing a full, correct ping (RTT measured successfully every
+	// time) that resisted extensive on-device bisection - see the
+	// switch-build history around commits 974b7e4..942b055 for the full
+	// investigation, including two genuine pre-existing thread-lifecycle
+	// bugs that were found and fixed along the way but did not resolve it.
+	// Falling back to the simple first-listed datacenter with a
+	// conservative guessed MTU so streaming actually works while that's
+	// unresolved. RTT data already captured for the first datacenter
+	// before the crash was a consistently healthy 8-10ms, which doesn't
+	// support "wrong datacenter" as the explanation for the original
+	// motion-triggered packet loss this was meant to test anyway.
 	int datacenter_count = json_object_array_length(datacenters);
-	bool have_best = false;
-	uint64_t best_rtt_us = 0;
-	for(int i = 0; i < datacenter_count; i++)
-	{
-		json_object *dc = json_object_array_get_idx(datacenters, i);
-		std::string dc_name = JsonGetString(dc, "dataCenter");
-		std::string dc_ip = JsonGetString(dc, "publicIp");
-		json_object *port_obj = nullptr;
-		int dc_port = 0;
-		if(json_object_object_get_ex(dc, "port", &port_obj))
-			dc_port = json_object_get_int(port_obj);
-		if(dc_ip.empty() || dc_port <= 0)
-			continue;
+	json_object *first = json_object_array_get_idx(datacenters, 0);
+	selected_datacenter = JsonGetString(first, "dataCenter");
+	selected_public_ip = JsonGetString(first, "publicIp");
+	json_object *port_obj = nullptr;
+	if(json_object_object_get_ex(first, "port", &port_obj))
+		selected_port = json_object_get_int(port_obj);
+	selected_rtt_ms = 20;
+	selected_mtu_in = 1200;
+	selected_mtu_out = 1200;
 
-		uint64_t rtt_us = 0;
-		uint32_t mtu_in = 0;
-		uint32_t mtu_out = 0;
-		bool ok = PingDatacenter(dc_ip, dc_port, config_key, service_type, log, &rtt_us, &mtu_in, &mtu_out);
-		if(!ok)
-		{
-			CHIAKI_LOGI(log, "CloudGaikai: ping failed for '%s' (%s:%d)", dc_name.c_str(), dc_ip.c_str(), dc_port);
-			continue;
-		}
-
-		CHIAKI_LOGI(log, "CloudGaikai: ping '%s' (%s:%d): rtt=%.1fms mtu_in=%u mtu_out=%u",
-			dc_name.c_str(), dc_ip.c_str(), dc_port, rtt_us / 1000.0, mtu_in, mtu_out);
-
-		if(!have_best || rtt_us < best_rtt_us)
-		{
-			have_best = true;
-			best_rtt_us = rtt_us;
-			selected_datacenter = dc_name;
-			selected_public_ip = dc_ip;
-			selected_port = dc_port;
-			selected_rtt_ms = (int)(rtt_us / 1000);
-			selected_mtu_in = (int)mtu_in;
-			selected_mtu_out = (int)mtu_out;
-		}
-	}
-
-	if(have_best)
-	{
-		CHIAKI_LOGI(log, "CloudGaikai: %d datacenters available, picked '%s' (%s:%d) with measured rtt=%dms",
-			datacenter_count, selected_datacenter.c_str(), selected_public_ip.c_str(), selected_port, selected_rtt_ms);
-	}
-	else
-	{
-		// All pings failed (e.g. UDP blocked/filtered somewhere on this
-		// network) - fall back to the first-listed datacenter with a
-		// conservative guessed MTU rather than failing the whole session.
-		json_object *first = json_object_array_get_idx(datacenters, 0);
-		selected_datacenter = JsonGetString(first, "dataCenter");
-		selected_public_ip = JsonGetString(first, "publicIp");
-		json_object *port_obj = nullptr;
-		if(json_object_object_get_ex(first, "port", &port_obj))
-			selected_port = json_object_get_int(port_obj);
-		selected_rtt_ms = 20;
-		selected_mtu_in = 1200;
-		selected_mtu_out = 1200;
-
-		CHIAKI_LOGW(log, "CloudGaikai: all %d datacenter pings failed, falling back to '%s' (%s:%d) without RTT data",
-			datacenter_count, selected_datacenter.c_str(), selected_public_ip.c_str(), selected_port);
-	}
+	CHIAKI_LOGI(log, "CloudGaikai: %d datacenters available, picked '%s' (%s:%d) without RTT ping",
+		datacenter_count, selected_datacenter.c_str(), selected_public_ip.c_str(), selected_port);
 
 	json_object_put(datacenters);
 

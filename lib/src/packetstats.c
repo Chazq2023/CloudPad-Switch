@@ -50,9 +50,24 @@ CHIAKI_EXPORT void chiaki_packet_stats_push_generation(ChiakiPacketStats *stats,
 
 CHIAKI_EXPORT void chiaki_packet_stats_push_seq(ChiakiPacketStats *stats, ChiakiSeqNum16 seq_num)
 {
+	// Every other function here locks stats->mutex before touching these
+	// fields - this one didn't, despite chiaki_packet_stats_get reading and
+	// resetting the same seq_received/seq_max/seq_min from a completely
+	// separate thread (congestion_control_thread_func) every 200ms. A
+	// concurrent unprotected increment racing against a locked reset can
+	// lose updates or observe a torn intermediate state, corrupting exactly
+	// the fields the reported "measured packet loss" is computed from. The
+	// race window only gets hit when this is called frequently enough to
+	// collide with the periodic 200ms read/reset - i.e. far more likely
+	// during motion (many packets/sec) than while idle, which matches the
+	// on-device loss pattern (0% idle, real measured spikes on movement)
+	// this session spent a long time chasing as if it were real network
+	// loss.
+	chiaki_mutex_lock(&stats->mutex);
 	stats->seq_received++;
 	if(chiaki_seq_num_16_gt(seq_num, stats->seq_max))
 		stats->seq_max = seq_num;
+	chiaki_mutex_unlock(&stats->mutex);
 }
 
 CHIAKI_EXPORT void chiaki_packet_stats_get(ChiakiPacketStats *stats, bool reset, uint64_t *received, uint64_t *lost)
