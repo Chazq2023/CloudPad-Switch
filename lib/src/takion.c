@@ -1152,7 +1152,6 @@ static void *takion_packet_process_thread_func(void *user)
 			takion->packet_process_queue_tail = NULL;
 		takion->packet_process_queue_count--;
 		chiaki_mutex_unlock(&takion->packet_process_mutex);
-		printf("[PKT THREAD] probe: about to handle packet buf_size=%zu\n", entry->buf_size); fflush(stdout);
 
 		if(takion->enable_crypt && !crypt_available && takion->gkcrypt_remote)
 		{
@@ -1193,7 +1192,6 @@ static void *takion_packet_process_thread_func(void *user)
 		}
 
 		takion_handle_packet(takion, entry->buf, entry->buf_size);
-		printf("[PKT THREAD] probe: handled packet, relocking\n"); fflush(stdout);
 		free(entry);
 
 		chiaki_mutex_lock(&takion->packet_process_mutex);
