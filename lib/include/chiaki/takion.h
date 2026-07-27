@@ -185,6 +185,22 @@ typedef struct chiaki_takion_t
 	ChiakiKeyState key_state;
 
 	bool enable_dualsense;
+
+	/**
+	 * The recv thread's only job is to keep calling recv() as fast as
+	 * possible and hand raw packets off here - actual processing (MAC check,
+	 * decrypt, FEC reconstruction, reorder queue, callback dispatch) happens
+	 * on a separate thread so a burst of expensive FEC recovery work never
+	 * delays the next recv() call and overflows the kernel's own receive
+	 * queue. See takion_packet_process_thread_func in takion.c.
+	 */
+	struct chiaki_takion_recv_packet_t *packet_process_queue_head;
+	struct chiaki_takion_recv_packet_t *packet_process_queue_tail;
+	size_t packet_process_queue_count;
+	ChiakiMutex packet_process_mutex;
+	ChiakiCond packet_process_cond;
+	ChiakiThread packet_process_thread;
+	bool packet_process_thread_running;
 } ChiakiTakion;
 
 

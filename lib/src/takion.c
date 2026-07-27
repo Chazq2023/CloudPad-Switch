@@ -187,7 +187,22 @@ typedef struct chiaki_takion_postponed_packet_t
 	size_t buf_size;
 } ChiakiTakionPostponedPacket;
 
+typedef struct chiaki_takion_recv_packet_t
+{
+	uint8_t *buf;
+	size_t buf_size;
+	struct chiaki_takion_recv_packet_t *next;
+} TakionRecvPacket;
+
+// Bound on raw packets awaiting processing. At ~1500 bytes/packet this is a
+// generous ~768KB worst case. If the processing thread ever falls behind
+// this far, dropping the oldest unprocessed packet is no worse than the
+// packet never having arrived at all - both the reorder queue and FEC
+// reconstruction already have to tolerate real network loss.
+#define TAKION_PACKET_PROCESS_QUEUE_MAX 512
+
 static void *takion_thread_func(void *user);
+static void *takion_packet_process_thread_func(void *user);
 static void takion_handle_packet(ChiakiTakion *takion, uint8_t *buf, size_t buf_size);
 static ChiakiErrorCode takion_handle_packet_mac(ChiakiTakion *takion, uint8_t base_type, uint8_t *buf, size_t buf_size);
 static void takion_handle_packet_message(ChiakiTakion *takion, uint8_t *buf, size_t buf_size);
@@ -1075,35 +1090,31 @@ static void takion_data_drop(uint64_t seq_num, void *elem_user, void *cb_user)
 	free(entry);
 }
 
-static void *takion_thread_func(void *user)
+static void *takion_packet_process_thread_func(void *user)
 {
 	ChiakiTakion *takion = user;
-
-	uint32_t seq_num_remote_initial;
-	if(takion_handshake(takion, &seq_num_remote_initial) != CHIAKI_ERR_SUCCESS)
-		goto beach;
-
-	if(chiaki_reorder_queue_init_32(&takion->data_queue, TAKION_REORDER_QUEUE_SIZE_EXP, seq_num_remote_initial) != CHIAKI_ERR_SUCCESS)
-		goto beach;
-
-	chiaki_reorder_queue_set_drop_cb(&takion->data_queue, takion_data_drop, takion);
-
-	// The send buffer size MUST be consistent with the acked seqnums array size in takion_handle_packet_message_data_ack()
-	if(chiaki_takion_send_buffer_init(&takion->send_buffer, takion, TAKION_SEND_BUFFER_SIZE) != CHIAKI_ERR_SUCCESS)
-		goto error_reoder_queue;
-
-
-	if(takion->cb)
-	{
-		ChiakiTakionEvent event = { 0 };
-		event.type = CHIAKI_TAKION_EVENT_TYPE_CONNECTED;
-		takion->cb(&event, takion->cb_user);
-	}
-
 	bool crypt_available = takion->gkcrypt_remote ? true : false;
 
+	chiaki_mutex_lock(&takion->packet_process_mutex);
 	while(true)
 	{
+		while(takion->packet_process_thread_running && !takion->packet_process_queue_head)
+			chiaki_cond_wait(&takion->packet_process_cond, &takion->packet_process_mutex);
+
+		if(!takion->packet_process_queue_head)
+		{
+			if(!takion->packet_process_thread_running)
+				break;
+			continue;
+		}
+
+		TakionRecvPacket *entry = takion->packet_process_queue_head;
+		takion->packet_process_queue_head = entry->next;
+		if(!takion->packet_process_queue_head)
+			takion->packet_process_queue_tail = NULL;
+		takion->packet_process_queue_count--;
+		chiaki_mutex_unlock(&takion->packet_process_mutex);
+
 		if(takion->enable_crypt && !crypt_available && takion->gkcrypt_remote)
 		{
 			crypt_available = true;
@@ -1123,7 +1134,6 @@ static void *takion_thread_func(void *user)
 					chiaki_reorder_queue_drop(&takion->data_queue, i);
 				}
 			}
-
 		}
 
 		if(takion->postponed_packets && takion->gkcrypt_remote)
@@ -1143,6 +1153,53 @@ static void *takion_thread_func(void *user)
 			takion->postponed_packets_count = 0;
 		}
 
+		takion_handle_packet(takion, entry->buf, entry->buf_size);
+		free(entry);
+
+		chiaki_mutex_lock(&takion->packet_process_mutex);
+	}
+	chiaki_mutex_unlock(&takion->packet_process_mutex);
+	return NULL;
+}
+
+static void *takion_thread_func(void *user)
+{
+	ChiakiTakion *takion = user;
+
+	uint32_t seq_num_remote_initial;
+	if(takion_handshake(takion, &seq_num_remote_initial) != CHIAKI_ERR_SUCCESS)
+		goto beach;
+
+	if(chiaki_reorder_queue_init_32(&takion->data_queue, TAKION_REORDER_QUEUE_SIZE_EXP, seq_num_remote_initial) != CHIAKI_ERR_SUCCESS)
+		goto beach;
+
+	chiaki_reorder_queue_set_drop_cb(&takion->data_queue, takion_data_drop, takion);
+
+	// The send buffer size MUST be consistent with the acked seqnums array size in takion_handle_packet_message_data_ack()
+	if(chiaki_takion_send_buffer_init(&takion->send_buffer, takion, TAKION_SEND_BUFFER_SIZE) != CHIAKI_ERR_SUCCESS)
+		goto error_reoder_queue;
+
+	if(chiaki_mutex_init(&takion->packet_process_mutex, false) != CHIAKI_ERR_SUCCESS)
+		goto error_send_buffer;
+	if(chiaki_cond_init(&takion->packet_process_cond) != CHIAKI_ERR_SUCCESS)
+		goto error_packet_process_mutex;
+	takion->packet_process_queue_head = NULL;
+	takion->packet_process_queue_tail = NULL;
+	takion->packet_process_queue_count = 0;
+	takion->packet_process_thread_running = true;
+	if(chiaki_thread_create(&takion->packet_process_thread, takion_packet_process_thread_func, takion) != CHIAKI_ERR_SUCCESS)
+		goto error_packet_process_cond;
+	chiaki_thread_set_name(&takion->packet_process_thread, "Chiaki Takion Packet Process");
+
+	if(takion->cb)
+	{
+		ChiakiTakionEvent event = { 0 };
+		event.type = CHIAKI_TAKION_EVENT_TYPE_CONNECTED;
+		takion->cb(&event, takion->cb_user);
+	}
+
+	while(true)
+	{
 		size_t received_size = 1500;
 		uint8_t *buf = malloc(received_size); // TODO: no malloc?
 		if(!buf)
@@ -1153,18 +1210,68 @@ static void *takion_thread_func(void *user)
 			free(buf);
 			break;
 		}
-		
+
 		// CHIAKI_LOGV(takion->log, "Takion received packet: %zu bytes, type=%#x", received_size, buf[0]);
-		
+
 		uint8_t *resized_buf = realloc(buf, received_size);
 		if(!resized_buf)
 		{
 		    free(buf);
 		    continue;
 		}
-		takion_handle_packet(takion, resized_buf, received_size);
+
+		TakionRecvPacket *entry = malloc(sizeof(TakionRecvPacket));
+		if(!entry)
+		{
+			free(resized_buf);
+			continue;
+		}
+		entry->buf = resized_buf;
+		entry->buf_size = received_size;
+		entry->next = NULL;
+
+		chiaki_mutex_lock(&takion->packet_process_mutex);
+		if(takion->packet_process_queue_count >= TAKION_PACKET_PROCESS_QUEUE_MAX)
+		{
+			TakionRecvPacket *dropped = takion->packet_process_queue_head;
+			takion->packet_process_queue_head = dropped->next;
+			if(!takion->packet_process_queue_head)
+				takion->packet_process_queue_tail = NULL;
+			takion->packet_process_queue_count--;
+			CHIAKI_LOGW(takion->log, "Takion packet process queue full, dropping oldest unprocessed packet");
+			free(dropped->buf);
+			free(dropped);
+		}
+		if(takion->packet_process_queue_tail)
+			takion->packet_process_queue_tail->next = entry;
+		else
+			takion->packet_process_queue_head = entry;
+		takion->packet_process_queue_tail = entry;
+		takion->packet_process_queue_count++;
+		chiaki_mutex_unlock(&takion->packet_process_mutex);
+		chiaki_cond_signal(&takion->packet_process_cond);
 	}
 
+	chiaki_mutex_lock(&takion->packet_process_mutex);
+	takion->packet_process_thread_running = false;
+	chiaki_mutex_unlock(&takion->packet_process_mutex);
+	chiaki_cond_signal(&takion->packet_process_cond);
+	chiaki_thread_join(&takion->packet_process_thread, NULL);
+
+	while(takion->packet_process_queue_head)
+	{
+		TakionRecvPacket *entry = takion->packet_process_queue_head;
+		takion->packet_process_queue_head = entry->next;
+		free(entry->buf);
+		free(entry);
+	}
+	takion->packet_process_queue_tail = NULL;
+
+error_packet_process_cond:
+	chiaki_cond_fini(&takion->packet_process_cond);
+error_packet_process_mutex:
+	chiaki_mutex_fini(&takion->packet_process_mutex);
+error_send_buffer:
 	chiaki_takion_send_buffer_fini(&takion->send_buffer);
 
 error_reoder_queue:

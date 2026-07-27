@@ -48,12 +48,6 @@ Host::~Host()
 
 int Host::InitSession(IO *user)
 {
-	// TEMP DIAGNOSTIC: force 540p regardless of settings, to test whether a
-	// smaller per-frame burst size (independent of the average bitrate knob,
-	// already tested with no effect) avoids the real measured packet loss
-	// (0% idle, 40-66% during camera motion, per PACKET_LOSS_DETAIL logging)
-	// seen at 720p. Revert once this test is done.
-	this->video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_540p;
 	chiaki_connect_video_profile_preset(&(this->video_profile),
 		this->video_resolution, this->video_fps);
 	// Override the resolution preset's default bitrate if the user picked a
