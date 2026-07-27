@@ -1099,6 +1099,7 @@ static void *takion_packet_process_thread_func(void *user)
 {
 	ChiakiTakion *takion = user;
 	bool crypt_available = takion->gkcrypt_remote ? true : false;
+	printf("[PKT THREAD] probe: started\n"); fflush(stdout);
 
 	chiaki_mutex_lock(&takion->packet_process_mutex);
 	while(true)
@@ -1108,6 +1109,7 @@ static void *takion_packet_process_thread_func(void *user)
 
 		if(!takion->packet_process_queue_head)
 		{
+			printf("[PKT THREAD] probe: woke with empty queue, running=%d\n", (int)takion->packet_process_thread_running); fflush(stdout);
 			if(!takion->packet_process_thread_running)
 				break;
 			continue;
@@ -1119,6 +1121,7 @@ static void *takion_packet_process_thread_func(void *user)
 			takion->packet_process_queue_tail = NULL;
 		takion->packet_process_queue_count--;
 		chiaki_mutex_unlock(&takion->packet_process_mutex);
+		printf("[PKT THREAD] probe: about to handle packet buf_size=%zu\n", entry->buf_size); fflush(stdout);
 
 		if(takion->enable_crypt && !crypt_available && takion->gkcrypt_remote)
 		{
@@ -1159,11 +1162,13 @@ static void *takion_packet_process_thread_func(void *user)
 		}
 
 		takion_handle_packet(takion, entry->buf, entry->buf_size);
+		printf("[PKT THREAD] probe: handled packet, relocking\n"); fflush(stdout);
 		free(entry);
 
 		chiaki_mutex_lock(&takion->packet_process_mutex);
 	}
 	chiaki_mutex_unlock(&takion->packet_process_mutex);
+	printf("[PKT THREAD] probe: returning\n"); fflush(stdout);
 	return NULL;
 }
 
