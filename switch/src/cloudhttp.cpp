@@ -3,6 +3,13 @@
 #include "cloudhttp.h"
 
 #include <cctype>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 
 #include <curl/curl.h>
 #include <json-c/json.h>
@@ -21,6 +28,33 @@ namespace
 	{
 		out->append((char *)contents, size * nmemb);
 		return size * nmemb;
+	}
+
+	// Diagnostic only: a probe on device found the app's socket budget is
+	// already fully exhausted (0/20 throwaway sockets) by the time the cloud
+	// stream's first real UDP socket tries to open, after 14+ sequential
+	// HttpRequest calls. This pinpoints exactly which call in that sequence
+	// is the one that tips the budget to zero, by attempting a throwaway
+	// open+close after every single HttpRequest and logging a running count.
+	int g_httpRequestCount = 0;
+
+	void ProbeSocketBudgetAfterRequest(const std::string &url)
+	{
+		g_httpRequestCount++;
+		errno = 0;
+		int probe_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if(probe_fd < 0)
+		{
+			printf("[HTTP PROBE] after request #%d (%s): throwaway socket() FAILED, errno=%d (%s)\n",
+				g_httpRequestCount, url.c_str(), errno, strerror(errno));
+		}
+		else
+		{
+			printf("[HTTP PROBE] after request #%d (%s): throwaway socket() ok\n",
+				g_httpRequestCount, url.c_str());
+			close(probe_fd);
+		}
+		fflush(stdout);
 	}
 }
 
@@ -70,6 +104,7 @@ namespace cloudhttp
 			*out_error = curl_easy_strerror(res);
 			curl_slist_free_all(header_list);
 			curl_easy_cleanup(curl);
+			ProbeSocketBudgetAfterRequest(url);
 			return false;
 		}
 
@@ -81,6 +116,7 @@ namespace cloudhttp
 
 		curl_slist_free_all(header_list);
 		curl_easy_cleanup(curl);
+		ProbeSocketBudgetAfterRequest(url);
 		return true;
 	}
 
