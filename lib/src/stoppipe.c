@@ -4,6 +4,7 @@
 #include <chiaki/sock.h>
 
 #include <fcntl.h>
+#include <stdio.h>
 
 #ifdef _WIN32
 #include <ws2tcpip.h>
@@ -26,7 +27,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 	// struct sockaddr_in addr;
 	int addr_size = sizeof(stop_pipe->addr);
 
+	printf("[STOP PIPE] probe: before socket()\n"); fflush(stdout);
 	stop_pipe->fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	printf("[STOP PIPE] probe: after socket(), fd=%d\n", stop_pipe->fd); fflush(stdout);
 	if(stop_pipe->fd < 0)
 		return CHIAKI_ERR_UNKNOWN;
 	stop_pipe->addr.sin_family = AF_INET;
@@ -35,10 +38,14 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 	// use a random port (dedicate one socket per object)
 	stop_pipe->addr.sin_port = htons(0);
 	// bind on localhost
+	printf("[STOP PIPE] probe: before bind()\n"); fflush(stdout);
 	bind(stop_pipe->fd, (struct sockaddr *) &stop_pipe->addr, addr_size);
+	printf("[STOP PIPE] probe: after bind()\n"); fflush(stdout);
 	// listen
 	getsockname(stop_pipe->fd, (struct sockaddr *) &stop_pipe->addr, &addr_size);
+	printf("[STOP PIPE] probe: after getsockname()\n"); fflush(stdout);
 	int r = fcntl(stop_pipe->fd, F_SETFL, O_NONBLOCK);
+	printf("[STOP PIPE] probe: after fcntl(), r=%d\n", r); fflush(stdout);
 	if(r == -1)
 	{
 		close(stop_pipe->fd);
