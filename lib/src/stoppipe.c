@@ -3,8 +3,10 @@
 #include <chiaki/stoppipe.h>
 #include <chiaki/sock.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <ws2tcpip.h>
@@ -28,8 +30,10 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 	int addr_size = sizeof(stop_pipe->addr);
 
 	printf("[STOP PIPE] probe: before socket()\n"); fflush(stdout);
+	errno = 0;
 	stop_pipe->fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	printf("[STOP PIPE] probe: after socket(), fd=%d\n", stop_pipe->fd); fflush(stdout);
+	printf("[STOP PIPE] probe: after socket(), fd=%d errno=%d (%s)\n",
+		stop_pipe->fd, errno, strerror(errno)); fflush(stdout);
 	if(stop_pipe->fd < 0)
 		return CHIAKI_ERR_UNKNOWN;
 	stop_pipe->addr.sin_family = AF_INET;

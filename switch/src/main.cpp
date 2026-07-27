@@ -43,7 +43,14 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 
 	.sb_efficiency = 8,
 
-	.num_bsd_sessions = 16,
+	// The cloud auth/catalog/Kamaji/Gaikai flow makes many more sequential
+	// blocking HTTPS requests per stream launch than local Remote Play ever
+	// did (sign-in, catalog/entitlement fetches, then ~8 Gaikai allocation
+	// steps), each opening and closing its own libcurl socket - 16 concurrent
+	// BSD sessions was tight enough to run out by the time chiaki_session_init
+	// opens its own stop-pipe socket, which then fails with socket()==-1
+	// (see chiaki_stop_pipe_init's __SWITCH__ branch, lib/src/stoppipe.c).
+	.num_bsd_sessions = 32,
 	.bsd_service_type = BsdServiceType_User,
 };
 #endif // __SWITCH__
