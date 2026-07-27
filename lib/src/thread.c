@@ -48,10 +48,29 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_create(ChiakiThread *thread, ChiakiT
 #ifdef __SWITCH__
 	if(get_thread_limit() <= 1)
 		return CHIAKI_ERR_THREAD;
-#endif
+	// pthread_create with NULL attrs uses whatever devkitA64/libnx's default
+	// stack size is, which is small enough that a thread doing real packet
+	// processing (e.g. the Takion packet-process thread introduced this
+	// session) can overflow it under real traffic - observed on-device as a
+	// clean, correct run (all packets handled, thread function returns
+	// normally) immediately followed by a silent crash inside the pthread
+	// library's own join/cleanup path, consistent with stack corruption
+	// only manifesting once the corrupted region is touched during thread
+	// teardown. Thread stacks come out of the app's own heap (a much larger,
+	// separate budget from the "bsd" sysmodule's constrained socket transfer
+	// memory), so a generous explicit size here is cheap.
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 256 * 1024);
+	int r = pthread_create(&thread->thread, &attr, func, arg);
+	pthread_attr_destroy(&attr);
+	if(r != 0)
+		return CHIAKI_ERR_THREAD;
+#else
 	int r = pthread_create(&thread->thread, NULL, func, arg);
 	if(r != 0)
 		return CHIAKI_ERR_THREAD;
+#endif
 #endif
 	return CHIAKI_ERR_SUCCESS;
 }
