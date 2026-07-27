@@ -29,12 +29,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stop_pipe_init(ChiakiStopPipe *stop_pipe)
 	// struct sockaddr_in addr;
 	int addr_size = sizeof(stop_pipe->addr);
 
-	// A socket a prior libcurl HTTP request used (this app's cloud
-	// auth/catalog/Kamaji/Gaikai flow makes many sequential requests before
-	// this point) can still be held by the BSD sockets service for a moment
-	// after close() returns, even with num_bsd_sessions comfortably above
-	// the real concurrent usage - retry briefly on transient exhaustion
-	// instead of failing the whole session outright.
+	// Confirmed on-device this can fail with ENOBUFS even on the very first
+	// UDP socket this app ever opens - a real shortfall in the shared socket
+	// buffer pool (see g_chiakiSocketInitConfig.sb_efficiency, switch/src/
+	// main.cpp), not a transient release-timing race - so a short retry
+	// alone won't reliably fix it, but it's a cheap, harmless safety net on
+	// top of sizing the pool correctly.
 	const int kMaxSocketAttempts = 5;
 	for(int attempt = 0; attempt < kMaxSocketAttempts; attempt++)
 	{

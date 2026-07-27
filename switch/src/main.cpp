@@ -41,17 +41,20 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	.udp_tx_buf_size = 0x40000,
 	.udp_rx_buf_size = 0x500000, // 5MB: 4MB required + headroom
 
-	.sb_efficiency = 8,
+	// The actual shared socket-buffer pool libnx reserves via tmemCreate() is
+	// sb_efficiency * (tcp_tx_buf_max_size + tcp_rx_buf_max_size +
+	// udp_tx_buf_size + udp_rx_buf_size) - this is the real lever for "how
+	// much total buffer space exists," not num_bsd_sessions (that's a
+	// separate IPC-session-handle limit; raising it to 32 broke
+	// socketInitialize()/nxlinkStdio() outright instead of helping, so it's
+	// back at the known-working 16 below). Confirmed on-device that even the
+	// very first, otherwise-idle UDP socket this app ever opens (chiaki_
+	// session_init's own stop-pipe, lib/src/stoppipe.c) fails outright with
+	// ENOBUFS at sb_efficiency=8 - consistently across a 5x/50ms retry, so
+	// it's a real capacity shortfall, not a transient release-timing race.
+	// Doubled to give real headroom against the udp_rx_buf_size bump above.
+	.sb_efficiency = 16,
 
-	// Raising this past 16 (tried 32) broke socketInitialize()/nxlinkStdio()
-	// outright - no nxlink logs at all and every HTTP request failing with
-	// "could not connect to server", i.e. the BSD sockets service itself
-	// never came up, not just running short on session slots. 16 is the
-	// known-working value (everything up to the very last socket - chiaki_
-	// session_init's own stop-pipe - succeeds under real usage); the tail-end
-	// exhaustion at that point is instead handled with a bounded retry in
-	// chiaki_stop_pipe_init (lib/src/stoppipe.c), which doesn't risk
-	// breaking socket init the way guessing a bigger session count does.
 	.num_bsd_sessions = 16,
 	.bsd_service_type = BsdServiceType_User,
 };
