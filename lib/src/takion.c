@@ -191,6 +191,7 @@ typedef struct chiaki_takion_recv_packet_t
 {
 	uint8_t *buf;
 	size_t buf_size;
+	bool pooled; // true if buf/this entry live inside a TakionRecvPool block
 	struct chiaki_takion_recv_packet_t *next;
 } TakionRecvPacket;
 
@@ -200,6 +201,59 @@ typedef struct chiaki_takion_recv_packet_t
 // packet never having arrived at all - both the reorder queue and FEC
 // reconstruction already have to tolerate real network loss.
 #define TAKION_PACKET_PROCESS_QUEUE_MAX 512
+
+// Every received packet used to cost 3 heap ops (malloc the 1500-byte
+// buffer, realloc it down to actual size, malloc the queue entry) plus a
+// mutex lock/unlock/cond signal, all on the recv thread's hot path. During a
+// motion-triggered burst of hundreds of packets in a couple hundred ms, that
+// allocator overhead (and lock contention with the allocator elsewhere,
+// e.g. rendering) widens the window during which the kernel's small, fixed
+// receive buffer can fill up before the recv thread drains it. This
+// preallocates exactly TAKION_PACKET_PROCESS_QUEUE_MAX entries+buffers once
+// at connect time - the recv loop pops one, receives directly into its
+// fixed buffer (no realloc needed, buf_size is tracked separately), and the
+// packet-process thread returns it to the free list instead of calling
+// free(). Sized to the queue max, so under normal operation the pool can
+// never be exhausted; the recv loop transparently falls back to plain
+// malloc if it ever is (or if the one-time pool allocation itself failed),
+// which is exactly the old behavior - never worse, just not accelerated.
+typedef struct takion_recv_pool_t
+{
+	TakionRecvPacket entries[TAKION_PACKET_PROCESS_QUEUE_MAX];
+	uint8_t bufs[TAKION_PACKET_PROCESS_QUEUE_MAX][1500];
+	TakionRecvPacket *free_list;
+} TakionRecvPool;
+
+static TakionRecvPool *takion_recv_pool_create(void)
+{
+	TakionRecvPool *pool = calloc(1, sizeof(TakionRecvPool));
+	if(!pool)
+		return NULL;
+	for(size_t i = 0; i < TAKION_PACKET_PROCESS_QUEUE_MAX; i++)
+	{
+		pool->entries[i].buf = pool->bufs[i];
+		pool->entries[i].pooled = true;
+		pool->entries[i].next = (i + 1 < TAKION_PACKET_PROCESS_QUEUE_MAX) ? &pool->entries[i + 1] : NULL;
+	}
+	pool->free_list = &pool->entries[0];
+	return pool;
+}
+
+// Caller must hold takion->packet_process_mutex.
+static void takion_recv_packet_release(ChiakiTakion *takion, TakionRecvPacket *entry)
+{
+	if(entry->pooled)
+	{
+		TakionRecvPool *pool = (TakionRecvPool *)takion->recv_pool;
+		entry->next = pool->free_list;
+		pool->free_list = entry;
+	}
+	else
+	{
+		free(entry->buf);
+		free(entry);
+	}
+}
 
 static void *takion_thread_func(void *user);
 static void *takion_packet_process_thread_func(void *user);
@@ -250,6 +304,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 	takion->packet_process_thread_created = false;
 	takion->packet_process_thread_done = false;
 	takion->send_buffer_created = false;
+	takion->recv_pool = NULL;
 	ret = chiaki_mutex_init(&takion->gkcrypt_local_mutex, true);
 	if(ret != CHIAKI_ERR_SUCCESS)
 		return ret;
@@ -564,6 +619,11 @@ CHIAKI_EXPORT void chiaki_takion_close(ChiakiTakion *takion)
 		chiaki_cond_fini(&takion->packet_process_cond);
 		chiaki_mutex_fini(&takion->packet_process_mutex);
 		printf("[TAKION CLOSE] probe: after packet_process_cond/mutex fini\n"); fflush(stdout);
+		// Safe only now: the packet-process thread has been joined above and
+		// the recv thread (which owns the pool pointer) was joined earlier at
+		// the top of this function, so nothing can still be touching it.
+		free(takion->recv_pool);
+		takion->recv_pool = NULL;
 	}
 	// Same deferred-reap pattern for send_buffer's own (pre-existing, older)
 	// thread - see the send_buffer_created comment in takion.h. Only a
@@ -1192,9 +1252,9 @@ static void *takion_packet_process_thread_func(void *user)
 		}
 
 		takion_handle_packet(takion, entry->buf, entry->buf_size);
-		free(entry);
 
 		chiaki_mutex_lock(&takion->packet_process_mutex);
+		takion_recv_packet_release(takion, entry);
 	}
 	takion->packet_process_thread_done = true;
 	chiaki_cond_broadcast(&takion->packet_process_cond);
@@ -1233,6 +1293,7 @@ static void *takion_thread_func(void *user)
 	takion->packet_process_queue_count = 0;
 	takion->packet_process_thread_running = true;
 	takion->packet_process_thread_done = false;
+	takion->recv_pool = takion_recv_pool_create(); // NULL is fine - see comment above the struct
 	if(chiaki_thread_create(&takion->packet_process_thread, takion_packet_process_thread_func, takion) != CHIAKI_ERR_SUCCESS)
 		goto error_packet_process_cond;
 	takion->packet_process_thread_created = true;
@@ -1247,33 +1308,53 @@ static void *takion_thread_func(void *user)
 
 	while(true)
 	{
+		TakionRecvPacket *entry = NULL;
+		TakionRecvPool *pool = (TakionRecvPool *)takion->recv_pool;
+		if(pool)
+		{
+			chiaki_mutex_lock(&takion->packet_process_mutex);
+			if(pool->free_list)
+			{
+				entry = pool->free_list;
+				pool->free_list = entry->next;
+			}
+			chiaki_mutex_unlock(&takion->packet_process_mutex);
+		}
+
 		size_t received_size = 1500;
-		uint8_t *buf = malloc(received_size); // TODO: no malloc?
+		uint8_t *buf = entry ? entry->buf : malloc(received_size);
 		if(!buf)
 			break;
 		ChiakiErrorCode err = takion_recv(takion, buf, &received_size, UINT64_MAX);
 		if(err != CHIAKI_ERR_SUCCESS)
 		{
-			free(buf);
+			if(entry)
+			{
+				chiaki_mutex_lock(&takion->packet_process_mutex);
+				takion_recv_packet_release(takion, entry);
+				chiaki_mutex_unlock(&takion->packet_process_mutex);
+			}
+			else
+				free(buf);
 			break;
 		}
 
 		// CHIAKI_LOGV(takion->log, "Takion received packet: %zu bytes, type=%#x", received_size, buf[0]);
 
-		uint8_t *resized_buf = realloc(buf, received_size);
-		if(!resized_buf)
-		{
-		    free(buf);
-		    continue;
-		}
-
-		TakionRecvPacket *entry = malloc(sizeof(TakionRecvPacket));
 		if(!entry)
 		{
-			free(resized_buf);
-			continue;
+			// Pool exhausted (or never allocated) - same fallback path as before,
+			// just without the pointless realloc-down-to-size (buf_size is
+			// tracked separately, nothing needs the allocation shrunk).
+			entry = malloc(sizeof(TakionRecvPacket));
+			if(!entry)
+			{
+				free(buf);
+				continue;
+			}
+			entry->buf = buf;
+			entry->pooled = false;
 		}
-		entry->buf = resized_buf;
 		entry->buf_size = received_size;
 		entry->next = NULL;
 
@@ -1286,8 +1367,7 @@ static void *takion_thread_func(void *user)
 				takion->packet_process_queue_tail = NULL;
 			takion->packet_process_queue_count--;
 			CHIAKI_LOGW(takion->log, "Takion packet process queue full, dropping oldest unprocessed packet");
-			free(dropped->buf);
-			free(dropped);
+			takion_recv_packet_release(takion, dropped);
 		}
 		if(takion->packet_process_queue_tail)
 			takion->packet_process_queue_tail->next = entry;
@@ -1317,13 +1397,14 @@ static void *takion_thread_func(void *user)
 	chiaki_mutex_unlock(&takion->packet_process_mutex);
 	printf("[TAKION SHUTDOWN] probe: packet_process_thread confirmed done\n"); fflush(stdout);
 
+	chiaki_mutex_lock(&takion->packet_process_mutex);
 	while(takion->packet_process_queue_head)
 	{
 		TakionRecvPacket *entry = takion->packet_process_queue_head;
 		takion->packet_process_queue_head = entry->next;
-		free(entry->buf);
-		free(entry);
+		takion_recv_packet_release(takion, entry);
 	}
+	chiaki_mutex_unlock(&takion->packet_process_mutex);
 	takion->packet_process_queue_tail = NULL;
 	printf("[TAKION SHUTDOWN] probe: queue drained\n"); fflush(stdout);
 #ifdef __SWITCH__
@@ -1340,6 +1421,8 @@ static void *takion_thread_func(void *user)
 	goto error_send_buffer;
 
 error_packet_process_cond:
+	free(takion->recv_pool);
+	takion->recv_pool = NULL;
 	chiaki_cond_fini(&takion->packet_process_cond);
 	printf("[TAKION SHUTDOWN] probe: after packet_process_cond fini\n"); fflush(stdout);
 error_packet_process_mutex:

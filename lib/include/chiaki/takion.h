@@ -197,6 +197,13 @@ typedef struct chiaki_takion_t
 	struct chiaki_takion_recv_packet_t *packet_process_queue_head;
 	struct chiaki_takion_recv_packet_t *packet_process_queue_tail;
 	size_t packet_process_queue_count;
+	// Opaque (TakionRecvPool*, defined in takion.c) preallocated pool of
+	// TAKION_PACKET_PROCESS_QUEUE_MAX recv buffers/entries, used to avoid a
+	// malloc+realloc+malloc per received packet on the hot path. NULL if the
+	// one-time pool allocation failed at connect time, in which case the
+	// recv loop transparently falls back to per-packet malloc exactly as
+	// before - never worse than the old behavior, just not accelerated.
+	void *recv_pool;
 	ChiakiMutex packet_process_mutex;
 	ChiakiCond packet_process_cond;
 	ChiakiThread packet_process_thread;
