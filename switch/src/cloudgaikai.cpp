@@ -572,6 +572,22 @@ bool CloudGaikai::Step11_PickDatacenter(std::string *out_error)
 	// See the class comment: real RTT-based selection isn't implemented, so
 	// this takes the first datacenter offered and the same documented dummy
 	// ping values upstream uses for its manual-selection bypass path.
+	//
+	// mtu_in/mtu_out below are NOT measured against the real path at all -
+	// they're reported to Sony as the safe packet size for this connection
+	// and flow straight through to the Takion session's actual MTU (see
+	// lib/src/session.c cloud_mtu_in/out), with the DF bit explicitly
+	// disabled (fragmentation allowed). 1454/1254 assumes a clean path with
+	// no encapsulation overhead anywhere between here and the datacenter,
+	// which is optimistic for a real WAN route (PPPoE, VPNs, mobile
+	// carrier NAT64, etc. all commonly reduce the effective MTU below
+	// that). Using a conservative, known-safe value instead, since large
+	// video packets getting silently IP-fragmented (and fragmented UDP
+	// being disproportionately dropped under load) would produce exactly
+	// the "fine when idle, real measured packet loss the instant frames
+	// get bigger during motion" pattern seen on-device - independent of
+	// bitrate, resolution, or decode/network threading, matching why none
+	// of those changes had any effect.
 	json_object *first = json_object_array_get_idx(datacenters, 0);
 	selected_datacenter = JsonGetString(first, "dataCenter");
 	selected_public_ip = JsonGetString(first, "publicIp");
@@ -579,8 +595,8 @@ bool CloudGaikai::Step11_PickDatacenter(std::string *out_error)
 	if(json_object_object_get_ex(first, "port", &port_obj))
 		selected_port = json_object_get_int(port_obj);
 	selected_rtt_ms = 20;
-	selected_mtu_in = 1454;
-	selected_mtu_out = 1254;
+	selected_mtu_in = 1200;
+	selected_mtu_out = 1200;
 
 	CHIAKI_LOGI(log, "CloudGaikai: %d datacenters available, picked '%s' (%s:%d) without RTT ping",
 		json_object_array_length(datacenters), selected_datacenter.c_str(), selected_public_ip.c_str(), selected_port);
