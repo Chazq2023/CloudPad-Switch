@@ -84,6 +84,20 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_create(ChiakiThread *thread, ChiakiT
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 256 * 1024);
+	// Every chiaki worker thread (Takion recv/packet-process, congestion
+	// control, feedback sender, session state machine, ...) previously ran at
+	// libnx's default priority (0x2C), identical to Borealis's main/render
+	// thread. During a motion-triggered burst (e.g. a large I-frame's worth
+	// of UDP packets arriving inside one ~16ms frame interval) that put recv
+	// and rendering on equal footing for the CPU, with no guarantee the
+	// network side would win a timeslice in time to drain the tiny 1MB
+	// kernel UDP buffer before it overflowed. Priority is 0x00 (highest) to
+	// 0x3F (lowest) on Horizon OS; a modest step above the 0x2C default -
+	// still well below the 0x3B special preemptive-multithreading band -
+	// makes these threads always preempt UI/render work without changing
+	// the scheduling model itself.
+	struct sched_param sched = { .sched_priority = 0x2A };
+	pthread_attr_setschedparam(&attr, &sched);
 	int r = pthread_create(&thread->thread, &attr, func, arg);
 	pthread_attr_destroy(&attr);
 	if(r != 0)
