@@ -557,6 +557,12 @@ CHIAKI_EXPORT void chiaki_takion_close(ChiakiTakion *takion)
 		printf("[TAKION CLOSE] probe: before packet_process_thread join\n"); fflush(stdout);
 		chiaki_thread_join(&takion->packet_process_thread, NULL);
 		printf("[TAKION CLOSE] probe: after packet_process_thread join\n"); fflush(stdout);
+		// Deferred from takion_thread_func's own shutdown - see the
+		// packet_process_thread_done comment in takion.h. Only safe to
+		// finalize now that the thread has actually been reaped above.
+		chiaki_cond_fini(&takion->packet_process_cond);
+		chiaki_mutex_fini(&takion->packet_process_mutex);
+		printf("[TAKION CLOSE] probe: after packet_process_cond/mutex fini\n"); fflush(stdout);
 	}
 	chiaki_stop_pipe_fini(&takion->stop_pipe);
 	printf("[TAKION CLOSE] probe: after stop_pipe_fini\n"); fflush(stdout);
@@ -1307,6 +1313,15 @@ static void *takion_thread_func(void *user)
 	}
 	takion->packet_process_queue_tail = NULL;
 	printf("[TAKION SHUTDOWN] probe: queue drained\n"); fflush(stdout);
+	// packet_process_mutex/cond are NOT finalized here even though the
+	// thread has logically finished (packet_process_thread_done true) -
+	// same underlying issue as the join itself (see the
+	// packet_process_thread_done comment in takion.h): the thread hasn't
+	// actually been reaped (joined) yet, that still happens later in
+	// chiaki_takion_close, and finalizing a mutex/cond a not-yet-reaped
+	// thread last touched crashed on-device exactly like the direct join
+	// did. chiaki_takion_close finalizes both, after it joins the thread.
+	goto error_send_buffer;
 
 error_packet_process_cond:
 	chiaki_cond_fini(&takion->packet_process_cond);
