@@ -131,7 +131,7 @@ CHIAKI_EXPORT void chiaki_video_receiver_av_packet(ChiakiVideoReceiver *video_re
 		// last frame not flushed yet?
 		if(video_receiver->frame_index_cur >= 0 && video_receiver->frame_index_prev != video_receiver->frame_index_cur)
 		{
-			CHIAKI_LOGW(
+			CHIAKI_LOGV(
 				video_receiver->log,
 				"VIDEO_FORCED_FLUSH_DETAIL old_frame=%d new_frame=%d src=%u/%u fec=%u/%u",
 				(int)video_receiver->frame_index_cur,
@@ -152,7 +152,7 @@ CHIAKI_EXPORT void chiaki_video_receiver_av_packet(ChiakiVideoReceiver *video_re
 		if(chiaki_seq_num_16_gt(frame_index, next_frame_expected)
 			&& !(frame_index == 1 && video_receiver->frame_index_cur < 0)) // ok for frame 1
 		{
-			CHIAKI_LOGW(
+			CHIAKI_LOGV(
 				video_receiver->log,
 				"VIDEO_FRAME_GAP_DETAIL expected=%d got=%d current=%d prev=%d prev_complete=%d",
 				(int)next_frame_expected,
@@ -162,7 +162,7 @@ CHIAKI_EXPORT void chiaki_video_receiver_av_packet(ChiakiVideoReceiver *video_re
 				(int)video_receiver->frame_index_prev_complete
 			);
 
-			CHIAKI_LOGW(video_receiver->log, "Detected missing or corrupt frame(s) from %d to %d", next_frame_expected, (int)frame_index);
+			CHIAKI_LOGV(video_receiver->log, "Detected missing or corrupt frame(s) from %d to %d", next_frame_expected, (int)frame_index);
 			err = stream_connection_send_corrupt_frame(&video_receiver->session->stream_connection, next_frame_expected, frame_index - 1);
 			if(err != CHIAKI_ERR_SUCCESS)
 				CHIAKI_LOGW(video_receiver->log, "Error sending corrupt frame.");

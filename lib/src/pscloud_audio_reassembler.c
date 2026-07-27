@@ -350,7 +350,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_pscloud_audio_reassembler_put_packet(
 	// Check if already received
 	if(reassembler->unit_received[packet->unit_index])
 	{
-		CHIAKI_LOGW(reassembler->log, "PSCLOUD audio: duplicate unit_index %u in gen=%u (frame_index=%u, received %u+%u/%u+%u)",
+		CHIAKI_LOGV(reassembler->log, "PSCLOUD audio: duplicate unit_index %u in gen=%u (frame_index=%u, received %u+%u/%u+%u)",
 			(unsigned)packet->unit_index, (unsigned)reassembler->generation_id, (unsigned)packet->frame_index,
 			(unsigned)reassembler->units_source_received, (unsigned)reassembler->units_fec_received,
 			(unsigned)reassembler->units_source_expected, (unsigned)reassembler->units_fec_expected);

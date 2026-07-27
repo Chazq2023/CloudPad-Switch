@@ -1069,7 +1069,7 @@ static ChiakiErrorCode takion_handshake(ChiakiTakion *takion, uint32_t *seq_num_
 static void takion_data_drop(uint64_t seq_num, void *elem_user, void *cb_user)
 {
 	ChiakiTakion *takion = cb_user;
-	CHIAKI_LOGW(takion->log, "Takion dropping data with seq num %#llx", (unsigned long long)seq_num);
+	CHIAKI_LOGV(takion->log, "Takion dropping data with seq num %#llx", (unsigned long long)seq_num);
 	TakionDataPacketEntry *entry = elem_user;
 	free(entry->packet_buf);
 	free(entry);
@@ -1756,7 +1756,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
 			{
 				if(av_diag_source_seen < av_diag_source_expected)
 				{
-					CHIAKI_LOGW(
+					CHIAKI_LOGV(
 						takion->log,
 						"AV_FRAME_INCOMPLETE_DETAIL frame=%u source_seen=%u/%u fec_seen=%u/%u total=%u mask_low64=%#llx",
 						(unsigned int)av_diag_frame,
@@ -1783,7 +1783,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
 
 			if(packet.unit_index != 0)
 			{
-				CHIAKI_LOGW(
+				CHIAKI_LOGV(
 					takion->log,
 					"AV_FRAME_START_GAP_DETAIL frame=%u first_unit=%u total=%u source=%u fec=%u packet_index=%u data=%zu",
 					(unsigned int)packet.frame_index,
@@ -1799,7 +1799,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
 
 		if(packet.unit_index >= packet.units_in_frame_total)
 		{
-			CHIAKI_LOGW(
+			CHIAKI_LOGV(
 				takion->log,
 				"AV_UNIT_RANGE_DETAIL frame=%u unit=%u total=%u fec=%u packet_index=%u data=%zu",
 				(unsigned int)packet.frame_index,
@@ -1817,7 +1817,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
 				uint64_t bit = 1ULL << packet.unit_index;
 				if(av_diag_seen_mask_low64 & bit)
 				{
-					CHIAKI_LOGW(
+					CHIAKI_LOGV(
 						takion->log,
 						"AV_DUP_UNIT_DETAIL frame=%u unit=%u total=%u fec=%u packet_index=%u data=%zu",
 						(unsigned int)packet.frame_index,

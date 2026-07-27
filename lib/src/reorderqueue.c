@@ -77,12 +77,7 @@ CHIAKI_EXPORT void chiaki_reorder_queue_push(ChiakiReorderQueue *queue, uint64_t
 	}
 
 	if(lt(seq_num, queue->begin))
-	{
-		// Debug: Log why we're dropping
-		printf("[REORDER] Dropping seq 0x%llx: too old (begin=0x%llx, end=0x%llx, count=%llu)\n",
-			(unsigned long long)seq_num, (unsigned long long)queue->begin, (unsigned long long)end, (unsigned long long)queue->count);
 		goto drop_it;
-	}
 
 	// => ge(seq_num, queue->end) == 1
 	assert(ge(seq_num, end));

@@ -90,7 +90,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_push(ChiakiTakionSendBuf
 
 	if(send_buffer->packets_count >= send_buffer->packets_size)
 	{
-		CHIAKI_LOGW(send_buffer->log, "Takion Send Buffer overflow");
+		CHIAKI_LOGV(send_buffer->log, "Takion Send Buffer overflow");
 		err = CHIAKI_ERR_OVERFLOW;
 		goto beach;
 	}

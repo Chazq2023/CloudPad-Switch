@@ -116,7 +116,7 @@ CHIAKI_EXPORT void chiaki_audio_receiver_av_packet(ChiakiAudioReceiver *audio_re
 			reassembler, packet, pscloud_audio_reassembler_frame_cb, audio_receiver);
 		if(err != CHIAKI_ERR_SUCCESS && err != CHIAKI_ERR_FEC_FAILED)
 		{
-			CHIAKI_LOGW(audio_receiver->log, "PSCLOUD audio reassembler error: %d", (int)err);
+			CHIAKI_LOGV(audio_receiver->log, "PSCLOUD audio reassembler error: %d", (int)err);
 		}
 		return;
 	}

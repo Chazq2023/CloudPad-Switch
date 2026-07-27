@@ -80,7 +80,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_frame_processor_alloc_frame(ChiakiFrameProc
 
 	if(packet->is_video && packet->unit_index != 0)
 	{
-		CHIAKI_LOGW(
+		CHIAKI_LOGV(
 			frame_processor->log,
 			"FRAME_ALLOC_DETAIL total=%u source=%u fec=%u first_unit=%u data=%zu is_video=%u",
 			packet->units_in_frame_total,
@@ -293,7 +293,7 @@ static ChiakiErrorCode chiaki_frame_processor_fec(ChiakiFrameProcessor *frame_pr
 	{
 		err = CHIAKI_ERR_FEC_FAILED;
 
-		CHIAKI_LOGW(
+		CHIAKI_LOGV(
 			frame_processor->log,
 			"FEC_FAIL_DETAIL src=%u/%u fec=%u/%u erasures=%zu total=%u recoverable=%s",
 			frame_processor->units_source_received,
@@ -305,7 +305,7 @@ static ChiakiErrorCode chiaki_frame_processor_fec(ChiakiFrameProcessor *frame_pr
 			erasures_count <= frame_processor->units_fec_expected ? "yes" : "no"
 		);
 
-		CHIAKI_LOGW(frame_processor->log, "FEC failed");
+		CHIAKI_LOGV(frame_processor->log, "FEC failed");
 	}
 	else
 	{
@@ -358,7 +358,7 @@ CHIAKI_EXPORT ChiakiFrameProcessorFlushResult chiaki_frame_processor_flush(Chiak
 		ChiakiFrameUnit *unit = frame_processor->unit_slots + i;
 		if(!unit->data_size)
 		{
-			CHIAKI_LOGW(frame_processor->log, "Missing unit %#llx", (unsigned long long)i);
+			CHIAKI_LOGV(frame_processor->log, "Missing unit %#llx", (unsigned long long)i);
 			continue;
 		}
 		if(unit->data_size < 2)
