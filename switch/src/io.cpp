@@ -234,6 +234,51 @@ void IO::DumpProgramError(GLuint prog, const char *func, const char *file, int l
 
 bool IO::VideoCB(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered, void *user)
 {
+	// Called on the Takion network-receive thread (see lib/src/videoreceiver.c's
+	// chiaki_video_receiver_flush_frame -> video_sample_cb). buf points into the
+	// frame processor's reassembly buffer, which gets reused for the next
+	// frame, so it must be copied before handing off - the actual decode now
+	// happens on a dedicated thread (see DecodeFrame/VideoDecodeThreadFunc)
+	// so this network thread is never blocked by FFmpeg decode time.
+	QueuedVideoFrame queued;
+	queued.data.assign(buf, buf + buf_size);
+	queued.frames_lost = frames_lost;
+	queued.frame_recovered = frame_recovered;
+
+	{
+		std::lock_guard<std::mutex> lock(this->video_decode_mutex);
+		if(this->video_decode_queue.size() >= VIDEO_DECODE_QUEUE_MAX)
+		{
+			CHIAKI_LOGW(this->log, "Video decode queue full, dropping oldest queued frame");
+			this->video_decode_queue.pop_front();
+		}
+		this->video_decode_queue.push_back(std::move(queued));
+	}
+	this->video_decode_cv.notify_one();
+	return true;
+}
+
+void IO::VideoDecodeThreadFunc()
+{
+	while(true)
+	{
+		QueuedVideoFrame queued;
+		{
+			std::unique_lock<std::mutex> lock(this->video_decode_mutex);
+			this->video_decode_cv.wait(lock, [this] {
+				return !this->video_decode_thread_running || !this->video_decode_queue.empty();
+			});
+			if(!this->video_decode_thread_running && this->video_decode_queue.empty())
+				return;
+			queued = std::move(this->video_decode_queue.front());
+			this->video_decode_queue.pop_front();
+		}
+		this->DecodeFrame(queued.data.data(), queued.data.size(), queued.frames_lost, queued.frame_recovered);
+	}
+}
+
+bool IO::DecodeFrame(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered)
+{
 	// callback function to decode video buffer
 
 	AVPacket* packet = av_packet_alloc();
@@ -439,12 +484,27 @@ bool IO::InitVideo(int video_width, int video_height, int screen_width, int scre
 	{
 		throw Exception("Failed to initiate OpenGl");
 	}
+
+	this->video_decode_thread_running = true;
+	this->video_decode_thread = std::thread(&IO::VideoDecodeThreadFunc, this);
+
 	return true;
 }
 
 bool IO::FreeVideo()
 {
 	bool ret = true;
+
+	if(this->video_decode_thread.joinable())
+	{
+		{
+			std::lock_guard<std::mutex> lock(this->video_decode_mutex);
+			this->video_decode_thread_running = false;
+		}
+		this->video_decode_cv.notify_one();
+		this->video_decode_thread.join();
+	}
+	this->video_decode_queue.clear();
 
 	if (this->hw_device_ctx) {
 			av_buffer_unref(&this->hw_device_ctx);

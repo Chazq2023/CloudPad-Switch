@@ -36,6 +36,10 @@ Reproducible: False
 
 #include <mutex>
 #include <map>
+#include <deque>
+#include <thread>
+#include <condition_variable>
+#include <vector>
 
 extern "C"
 {
@@ -113,6 +117,41 @@ class IO
 		uint32_t pacing_slow_streak = 0;
 		uint64_t pacing_last_decode_ms = 0;
 		uint32_t pacing_phase = 0;
+
+		// Decode runs on a dedicated thread instead of inline on the Takion
+		// network-receive thread. VideoCB (called from that network thread) used
+		// to call avcodec_send_packet/avcodec_receive_frame directly - during
+		// camera motion, decode of a complex frame can take long enough that the
+		// UDP socket goes unread for that whole span, so the kernel receive
+		// queue overflows and drops packets regardless of buffer size or
+		// bitrate. That corrupts a reference frame, which triggers more
+		// recovery decode work on the very same blocked thread, compounding the
+		// stall - matching the observed "fine when still, permanently broken
+		// the instant the camera moves" behavior exactly. VideoCB now just
+		// copies the encoded frame and hands it to this queue; the decode
+		// thread does the actual FFmpeg work, so the network thread is never
+		// blocked by decode time. Bounded and drop-oldest-on-overflow to keep
+		// latency bounded rather than growing unboundedly if decode ever
+		// genuinely can't keep up - safe because chiaki_video_receiver already
+		// tolerates the decoder silently missing a frame (see the "Always
+		// track this frame in the reference list... regardless of whether the
+		// decoder accepted it" comment in lib/src/videoreceiver.c) and relies
+		// on the hardware decoder's own error concealment for it.
+		struct QueuedVideoFrame
+		{
+			std::vector<uint8_t> data;
+			int32_t frames_lost;
+			bool frame_recovered;
+		};
+		static const size_t VIDEO_DECODE_QUEUE_MAX = 8;
+		std::deque<QueuedVideoFrame> video_decode_queue;
+		std::mutex video_decode_mutex;
+		std::condition_variable video_decode_cv;
+		std::thread video_decode_thread;
+		bool video_decode_thread_running = false;
+		void VideoDecodeThreadFunc();
+		bool DecodeFrame(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered);
+
 		bool InitOpenGl();
 		bool InitOpenGlTextures();
 		bool InitOpenGlTX1Textures();
