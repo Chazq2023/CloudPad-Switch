@@ -56,18 +56,20 @@ static const SocketInitConfig g_chiakiSocketInitConfig = {
 	// up front. Against a tiny real pool, nxlink's TCP socket plus one 5MB UDP
 	// reservation was apparently already at or past the edge. Shrinking this
 	// down to 0x10000 unblocked the whole connection flow (confirmed on-device:
-	// full session/Takion handshake succeeded), but on-device streaming then
-	// showed severe packet loss and no audio - Takion's own setsockopt call
-	// requesting 4MB (lib/src/takion.c:278) can't grow the socket past this
-	// process-wide default at all (Switch UDP sockets are fixed-size from
-	// creation, confirmed via TAKION_RCVBUF_DETAIL logging actual=65536 despite
-	// requesting 4194304), and 64KB is nowhere near enough to absorb bursts at
-	// the ~25-48 Mbit/s this stream negotiates before the kernel starts
-	// dropping packets. Bisecting upward from the proven-safe 0x10000 toward
-	// something Takion can actually use, without getting anywhere near the 5MB
-	// that broke the connection outright with just 2 sockets open.
+	// full session/Takion handshake succeeded). Bisecting upward from there:
+	// 0x80000 (512KB, confirmed via TAKION_RCVBUF_DETAIL actual=524288, so the
+	// value really does apply) still showed severe FEC failures on nearly
+	// every frame and no usable audio - not obviously better than 64KB despite
+	// 8x the buffer, which points at this being at least partly a real network
+	// throughput/stability limit (measured bitrate on-device swung wildly
+	// between 0.01 and 10 MBit/s against a ~48 Mbit/s target) rather than pure
+	// buffer starvation. Trying 0x200000 (2MB) as a bigger step - still
+	// comfortably short of the 5MB that broke the connection outright with
+	// only 2 sockets open, but there are now 4 concurrent UDP sockets at
+	// streaming time (3 persistent stop-pipes + Takion's own), so this is a
+	// real risk of reintroducing that failure and needs to be verified.
 	.udp_tx_buf_size = 0x10000,
-	.udp_rx_buf_size = 0x80000, // 512KB
+	.udp_rx_buf_size = 0x200000, // 2MB
 
 	.sb_efficiency = 16,
 
