@@ -255,6 +255,31 @@ static void takion_recv_packet_release(ChiakiTakion *takion, TakionRecvPacket *e
 	}
 }
 
+// Caller must hold takion->packet_process_mutex. Use this (never
+// takion_recv_packet_release) once entry->buf's *contents* have already been
+// handed off to takion_handle_packet as its own independently-freeable copy -
+// takion_handle_packet and everything it calls (takion_handle_packet_message,
+// the reorder queue via takion_flush_data_queue, postponed packets, ...) own
+// that copy and free() it themselves, immediately or much later on another
+// thread. entry->buf itself was never that copy for a pooled entry (it's a
+// pointer into the middle of the shared TakionRecvPool block, not a
+// standalone allocation - freeing it, or letting it be freed a second time
+// via a path that already freed the copy, is exactly what crashed here), so
+// this only ever returns the slot/wrapper, never touches entry->buf's data.
+static void takion_recv_packet_return_slot(ChiakiTakion *takion, TakionRecvPacket *entry)
+{
+	if(entry->pooled)
+	{
+		TakionRecvPool *pool = (TakionRecvPool *)takion->recv_pool;
+		entry->next = pool->free_list;
+		pool->free_list = entry;
+	}
+	else
+	{
+		free(entry);
+	}
+}
+
 static void *takion_thread_func(void *user);
 static void *takion_packet_process_thread_func(void *user);
 static void takion_handle_packet(ChiakiTakion *takion, uint8_t *buf, size_t buf_size);
@@ -1251,10 +1276,30 @@ static void *takion_packet_process_thread_func(void *user)
 			takion->postponed_packets_count = 0;
 		}
 
-		takion_handle_packet(takion, entry->buf, entry->buf_size);
+		// takion_handle_packet (and everything it calls - the reorder queue,
+		// postponed packets, ...) takes ownership of the buffer it's given and
+		// free()s it itself, immediately or much later on another thread. For a
+		// pooled entry, entry->buf is a pointer into the middle of the shared
+		// TakionRecvPool block, not a standalone allocation - handing that
+		// straight to takion_handle_packet let it (or a later free() via the
+		// reorder queue/postponed packets) free a non-malloc'd pointer, which is
+		// what crashed here on the very first real data packet (the cloud BANG
+		// response) to reach this path. Hand off an independent copy instead so
+		// the pool's own buffer is never touched by that ownership chain; the
+		// non-pooled fallback buffer is already a standalone malloc(), so it's
+		// handed off as-is exactly like before the pool existed.
+		uint8_t *handoff_buf = entry->buf;
+		if(entry->pooled)
+		{
+			handoff_buf = malloc(entry->buf_size);
+			if(handoff_buf)
+				memcpy(handoff_buf, entry->buf, entry->buf_size);
+		}
+		if(handoff_buf)
+			takion_handle_packet(takion, handoff_buf, entry->buf_size);
 
 		chiaki_mutex_lock(&takion->packet_process_mutex);
-		takion_recv_packet_release(takion, entry);
+		takion_recv_packet_return_slot(takion, entry);
 	}
 	takion->packet_process_thread_done = true;
 	chiaki_cond_broadcast(&takion->packet_process_cond);
