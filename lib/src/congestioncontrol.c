@@ -8,7 +8,7 @@ static void *congestion_control_thread_func(void *user)
 {
 	ChiakiCongestionControl *control = user;
 #ifdef __SWITCH__
-	chiaki_switch_register_thread_for_sampling("Congestion Control");
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("Congestion Control");
 #endif
 
 	ChiakiErrorCode err = chiaki_bool_pred_cond_lock(&control->stop_cond);
@@ -40,6 +40,9 @@ static void *congestion_control_thread_func(void *user)
 		CHIAKI_LOGV(control->takion->log, "Sending Congestion Control Packet, received: %u, lost: %u",
 			(unsigned int)packet.received, (unsigned int)packet.lost);
 		chiaki_takion_send_congestion(control->takion, &packet);
+#ifdef __SWITCH__
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
+#endif
 	}
 
 	chiaki_bool_pred_cond_unlock(&control->stop_cond);

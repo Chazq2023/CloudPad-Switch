@@ -314,13 +314,13 @@ void IO::CpuSampleThreadFunc()
 			thread_count = CHIAKI_SWITCH_MAX_SAMPLED_THREADS;
 		for(int i = 0; i < thread_count; i++)
 		{
-			uint64_t ticks = 0;
-			Result r = svcGetInfo(&ticks, InfoType_ThreadTickCount, chiaki_switch_sampled_threads[i].handle, 0);
-			if(R_FAILED(r))
-			{
-				printf(" [%s]=err%#x", chiaki_switch_sampled_threads[i].label, r);
-				continue;
-			}
+			// Reads what each thread last self-reported (chiaki_switch_self_
+			// report_ticks, called from within that thread's own loop) rather
+			// than querying it directly - InfoType_ThreadTickCount only
+			// returns a real value when a thread queries itself; every other
+			// combination silently returns 0 with no error, which is why the
+			// first version of this sampler read a flat 0.0 for every thread.
+			uint64_t ticks = chiaki_switch_sampled_threads[i].self_ticks;
 			uint64_t delta = ticks - prev_thread_ticks[i];
 			prev_thread_ticks[i] = ticks;
 			double busy_pct = elapsed > 0 ? 100.0 * (double)delta / (double)elapsed : 0.0;
@@ -343,7 +343,7 @@ void IO::VideoDecodeThreadFunc()
 	// was meant to fix. Same priority as the network worker threads, for the
 	// same reason: this thread also must not lose CPU time to UI rendering.
 	svcSetThreadPriority(threadGetCurHandle(), 0x2A);
-	chiaki_switch_register_thread_for_sampling("Video Decode");
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("Video Decode");
 	while(true)
 	{
 		QueuedVideoFrame queued;
@@ -358,6 +358,7 @@ void IO::VideoDecodeThreadFunc()
 			this->video_decode_queue.pop_front();
 		}
 		this->DecodeFrame(queued.data.data(), queued.data.size(), queued.frames_lost, queued.frame_recovered);
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
 	}
 }
 
@@ -548,8 +549,9 @@ bool IO::InitVideo(int video_width, int video_height, int screen_width, int scre
 	CHIAKI_LOGI(this->log, "load InitVideo");
 	// Whichever thread calls InitVideo (in practice, Borealis's main/render
 	// thread) - registered here since that thread has no dedicated entry
-	// point of its own to hook into.
-	chiaki_switch_register_thread_for_sampling("Main/Render (InitVideo caller)");
+	// point of its own to hook into. Self-reported from MainLoop() below,
+	// which is this thread's own natural per-frame work-item boundary.
+	this->cpu_sample_main_idx = chiaki_switch_register_thread_for_sampling("Main/Render (InitVideo caller)");
 	this->video_width = video_width;
 	this->video_height = video_height;
 
@@ -1538,6 +1540,7 @@ bool IO::MainLoop()
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	OpenGlDraw();
+	chiaki_switch_self_report_ticks(this->cpu_sample_main_idx);
 
 	return !this->quit;
 }

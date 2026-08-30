@@ -47,13 +47,18 @@ void chiaki_switch_log_resource_limits(const char *tag);
 
 // Diagnostic only: registers the calling thread (by its own handle - must
 // be called from within the thread being registered) under a fixed, static
-// label for periodic per-thread CPU tick sampling. See thread.c for the
-// backing array/count that a sampler elsewhere reads.
+// label for periodic per-thread CPU tick sampling. Returns the assigned
+// index (or -1 if the table is full) - the caller must hang onto it and
+// pass it to chiaki_switch_self_report_ticks() periodically from within its
+// own loop, since InfoType_ThreadTickCount can only be queried by a thread
+// about itself (verified against a from-scratch kernel reimplementation -
+// any other combination silently returns 0 with no error). See thread.c.
 #define CHIAKI_SWITCH_MAX_SAMPLED_THREADS 16
-typedef struct { const char *label; uint64_t handle; } ChiakiSwitchSampledThread;
+typedef struct { const char *label; uint64_t handle; uint64_t self_ticks; } ChiakiSwitchSampledThread;
 extern ChiakiSwitchSampledThread chiaki_switch_sampled_threads[CHIAKI_SWITCH_MAX_SAMPLED_THREADS];
 extern volatile int chiaki_switch_sampled_threads_count;
-void chiaki_switch_register_thread_for_sampling(const char *label);
+int chiaki_switch_register_thread_for_sampling(const char *label);
+void chiaki_switch_self_report_ticks(int idx);
 #endif
 
 

@@ -1217,7 +1217,7 @@ static void *takion_packet_process_thread_func(void *user)
 	bool crypt_available = takion->gkcrypt_remote ? true : false;
 	printf("[PKT THREAD] probe: started\n"); fflush(stdout);
 #ifdef __SWITCH__
-	chiaki_switch_register_thread_for_sampling("Takion Packet Process");
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("Takion Packet Process");
 #endif
 
 	chiaki_mutex_lock(&takion->packet_process_mutex);
@@ -1303,6 +1303,9 @@ static void *takion_packet_process_thread_func(void *user)
 
 		chiaki_mutex_lock(&takion->packet_process_mutex);
 		takion_recv_packet_return_slot(takion, entry);
+#ifdef __SWITCH__
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
+#endif
 	}
 	takion->packet_process_thread_done = true;
 	chiaki_cond_broadcast(&takion->packet_process_cond);
@@ -1316,7 +1319,7 @@ static void *takion_thread_func(void *user)
 	ChiakiTakion *takion = user;
 #ifdef __SWITCH__
 	chiaki_switch_log_resource_limits("takion_thread_func start");
-	chiaki_switch_register_thread_for_sampling("Takion Recv");
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("Takion Recv");
 #endif
 
 	uint32_t seq_num_remote_initial;
@@ -1426,6 +1429,9 @@ static void *takion_thread_func(void *user)
 		takion->packet_process_queue_count++;
 		chiaki_mutex_unlock(&takion->packet_process_mutex);
 		chiaki_cond_signal(&takion->packet_process_cond);
+#ifdef __SWITCH__
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
+#endif
 	}
 
 	printf("[TAKION SHUTDOWN] probe: recv loop exited, stopping packet process thread\n"); fflush(stdout);

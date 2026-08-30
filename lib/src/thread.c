@@ -68,13 +68,33 @@ static void *switch_thread_priority_trampoline(void *arg)
 ChiakiSwitchSampledThread chiaki_switch_sampled_threads[CHIAKI_SWITCH_MAX_SAMPLED_THREADS];
 volatile int chiaki_switch_sampled_threads_count = 0;
 
-void chiaki_switch_register_thread_for_sampling(const char *label)
+int chiaki_switch_register_thread_for_sampling(const char *label)
 {
 	int idx = __atomic_fetch_add(&chiaki_switch_sampled_threads_count, 1, __ATOMIC_RELAXED);
 	if(idx >= CHIAKI_SWITCH_MAX_SAMPLED_THREADS)
-		return;
+		return -1;
 	chiaki_switch_sampled_threads[idx].label = label;
 	chiaki_switch_sampled_threads[idx].handle = threadGetCurHandle();
+	chiaki_switch_sampled_threads[idx].self_ticks = 0;
+	return idx;
+}
+
+// InfoType_ThreadTickCount can only be queried by a thread about itself -
+// verified against a from-scratch kernel reimplementation (eden-emulator's
+// svc_info.cpp), which returns 0 with no error for any other combination.
+// A single central sampler thread cannot poll other threads' tick counts at
+// all; each monitored thread must call this about itself periodically
+// (e.g. once per work item/wakeup) so the sampler has something fresh to
+// read. info_sub_id must be UINT64_MAX for "total ticks across all cores" -
+// 0 (a real core index) only matches while that thread happens to be
+// running on core 0 at the exact instant of the call.
+void chiaki_switch_self_report_ticks(int idx)
+{
+	if(idx < 0 || idx >= CHIAKI_SWITCH_MAX_SAMPLED_THREADS)
+		return;
+	uint64_t ticks = 0;
+	svcGetInfo(&ticks, InfoType_ThreadTickCount, chiaki_switch_sampled_threads[idx].handle, UINT64_MAX);
+	chiaki_switch_sampled_threads[idx].self_ticks = ticks;
 }
 
 int64_t get_thread_limit()

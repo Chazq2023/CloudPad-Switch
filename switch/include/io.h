@@ -158,6 +158,11 @@ class IO
 		std::thread cpu_sample_thread;
 		bool cpu_sample_thread_running = false;
 		void CpuSampleThreadFunc();
+		// Set once in InitVideo (registering whichever thread calls it -  in
+		// practice Borealis's main/render thread), self-reported from every
+		// MainLoop() call since that's this thread's own natural per-frame
+		// work-item boundary.
+		int cpu_sample_main_idx = -1;
 
 		bool InitOpenGl();
 		bool InitOpenGlTextures();
