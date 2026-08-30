@@ -58,6 +58,25 @@ static void *switch_thread_priority_trampoline(void *arg)
 	return func(func_arg);
 }
 
+// Diagnostic only: a thread calls this once, from within itself (handles
+// are only meaningful queried by their own owning thread), to register for
+// periodic per-thread CPU tick sampling - see switch/src/io.cpp's
+// CpuSampleThreadFunc, which reads this list every second via
+// InfoType_ThreadTickCount to find out which specific thread(s) are
+// actually driving the ~100% CPU on 3/4 cores measured during streaming,
+// after both software video decode and software AES-GCM were ruled out.
+ChiakiSwitchSampledThread chiaki_switch_sampled_threads[CHIAKI_SWITCH_MAX_SAMPLED_THREADS];
+volatile int chiaki_switch_sampled_threads_count = 0;
+
+void chiaki_switch_register_thread_for_sampling(const char *label)
+{
+	int idx = __atomic_fetch_add(&chiaki_switch_sampled_threads_count, 1, __ATOMIC_RELAXED);
+	if(idx >= CHIAKI_SWITCH_MAX_SAMPLED_THREADS)
+		return;
+	chiaki_switch_sampled_threads[idx].label = label;
+	chiaki_switch_sampled_threads[idx].handle = threadGetCurHandle();
+}
+
 int64_t get_thread_limit()
 {
 	uint64_t resource_limit_handle_value = INVALID_HANDLE;

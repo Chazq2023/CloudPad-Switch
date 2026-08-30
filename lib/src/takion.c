@@ -1216,6 +1216,9 @@ static void *takion_packet_process_thread_func(void *user)
 	ChiakiTakion *takion = user;
 	bool crypt_available = takion->gkcrypt_remote ? true : false;
 	printf("[PKT THREAD] probe: started\n"); fflush(stdout);
+#ifdef __SWITCH__
+	chiaki_switch_register_thread_for_sampling("Takion Packet Process");
+#endif
 
 	chiaki_mutex_lock(&takion->packet_process_mutex);
 	while(true)
@@ -1313,6 +1316,7 @@ static void *takion_thread_func(void *user)
 	ChiakiTakion *takion = user;
 #ifdef __SWITCH__
 	chiaki_switch_log_resource_limits("takion_thread_func start");
+	chiaki_switch_register_thread_for_sampling("Takion Recv");
 #endif
 
 	uint32_t seq_num_remote_initial;

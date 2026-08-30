@@ -7,6 +7,9 @@
 static void *congestion_control_thread_func(void *user)
 {
 	ChiakiCongestionControl *control = user;
+#ifdef __SWITCH__
+	chiaki_switch_register_thread_for_sampling("Congestion Control");
+#endif
 
 	ChiakiErrorCode err = chiaki_bool_pred_cond_lock(&control->stop_cond);
 	if(err != CHIAKI_ERR_SUCCESS)

@@ -44,6 +44,16 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_set_name(ChiakiThread *thread, const
 // of chiaki log level. tag is printed alongside so multiple call sites are
 // distinguishable in the log.
 void chiaki_switch_log_resource_limits(const char *tag);
+
+// Diagnostic only: registers the calling thread (by its own handle - must
+// be called from within the thread being registered) under a fixed, static
+// label for periodic per-thread CPU tick sampling. See thread.c for the
+// backing array/count that a sampler elsewhere reads.
+#define CHIAKI_SWITCH_MAX_SAMPLED_THREADS 16
+typedef struct { const char *label; uint64_t handle; } ChiakiSwitchSampledThread;
+extern ChiakiSwitchSampledThread chiaki_switch_sampled_threads[CHIAKI_SWITCH_MAX_SAMPLED_THREADS];
+extern volatile int chiaki_switch_sampled_threads_count;
+void chiaki_switch_register_thread_for_sampling(const char *label);
 #endif
 
 

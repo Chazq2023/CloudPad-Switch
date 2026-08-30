@@ -7,6 +7,7 @@
 #include <thread>
 
 #include <switch.h>
+#include <chiaki/thread.h>
 
 // https://github.com/torvalds/linux/blob/41ba50b0572e90ed3d24fe4def54567e9050bc47/drivers/hid/hid-sony.c#L2742
 #define DS4_TRACKPAD_MAX_X 1920
@@ -274,6 +275,17 @@ void IO::CpuSampleThreadFunc()
 	for(int core = 0; core < kCoreCount; core++)
 		svcGetInfo(&prev_idle[core], InfoType_IdleTickCount, INVALID_HANDLE, core);
 
+	// Per-thread ticks (InfoType_ThreadTickCount) alongside per-core idle -
+	// once "which core(s) are maxed" wasn't enough to identify the culprit
+	// (both software video decode and software AES-GCM were fixed with zero
+	// change in the per-core numbers), this answers "which specific
+	// registered thread(s) are actually spending that CPU time". Threads
+	// register themselves (chiaki_switch_register_thread_for_sampling) as
+	// they start, so the list can grow between samples - a thread's first
+	// sample after registering will show its ticks since its own start, not
+	// since the last 1s window, which is fine for a diagnostic.
+	uint64_t prev_thread_ticks[CHIAKI_SWITCH_MAX_SAMPLED_THREADS] = {0};
+
 	while(this->cpu_sample_thread_running)
 	{
 		std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -295,6 +307,26 @@ void IO::CpuSampleThreadFunc()
 			printf(" core%d=%.1f", core, busy_pct);
 		}
 		printf("\n");
+
+		printf("[CPU PROBE THREADS] probe:");
+		int thread_count = chiaki_switch_sampled_threads_count;
+		if(thread_count > CHIAKI_SWITCH_MAX_SAMPLED_THREADS)
+			thread_count = CHIAKI_SWITCH_MAX_SAMPLED_THREADS;
+		for(int i = 0; i < thread_count; i++)
+		{
+			uint64_t ticks = 0;
+			Result r = svcGetInfo(&ticks, InfoType_ThreadTickCount, chiaki_switch_sampled_threads[i].handle, 0);
+			if(R_FAILED(r))
+			{
+				printf(" [%s]=err%#x", chiaki_switch_sampled_threads[i].label, r);
+				continue;
+			}
+			uint64_t delta = ticks - prev_thread_ticks[i];
+			prev_thread_ticks[i] = ticks;
+			double busy_pct = elapsed > 0 ? 100.0 * (double)delta / (double)elapsed : 0.0;
+			printf(" [%s]=%.1f", chiaki_switch_sampled_threads[i].label, busy_pct);
+		}
+		printf("\n");
 		fflush(stdout);
 	}
 }
@@ -311,6 +343,7 @@ void IO::VideoDecodeThreadFunc()
 	// was meant to fix. Same priority as the network worker threads, for the
 	// same reason: this thread also must not lose CPU time to UI rendering.
 	svcSetThreadPriority(threadGetCurHandle(), 0x2A);
+	chiaki_switch_register_thread_for_sampling("Video Decode");
 	while(true)
 	{
 		QueuedVideoFrame queued;
@@ -513,6 +546,10 @@ void IO::AudioCB(int16_t *buf, size_t samples_count)
 bool IO::InitVideo(int video_width, int video_height, int screen_width, int screen_height)
 {
 	CHIAKI_LOGI(this->log, "load InitVideo");
+	// Whichever thread calls InitVideo (in practice, Borealis's main/render
+	// thread) - registered here since that thread has no dedicated entry
+	// point of its own to hook into.
+	chiaki_switch_register_thread_for_sampling("Main/Render (InitVideo caller)");
 	this->video_width = video_width;
 	this->video_height = video_height;
 
