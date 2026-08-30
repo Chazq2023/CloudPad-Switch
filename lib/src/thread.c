@@ -23,6 +23,41 @@ static DWORD WINAPI win32_thread_func(LPVOID param)
 #endif
 
 #ifdef __SWITCH__
+// Horizon OS priority: 0x00 (highest) to 0x3F (lowest); 0x2C is libnx's
+// default (shared with Borealis's main/render thread), 0x3B+ is the special
+// preemptive-multithreading band. A modest step above default, still well
+// below that band, so chiaki worker threads reliably preempt UI/render work
+// during a burst without changing the scheduling model itself.
+#define CHIAKI_SWITCH_THREAD_PRIORITY 0x2A
+
+typedef struct switch_thread_trampoline_args_t
+{
+	ChiakiThreadFunc func;
+	void *arg;
+} SwitchThreadTrampolineArgs;
+
+// pthread_attr_setschedparam(), tried previously, compiles and links fine
+// but is a complete no-op on this toolchain's pthread implementation
+// (devkitA64's libsysbase pthread.o): disassembly confirms pthread_create()
+// only ever reads the stack addr/size fields out of pthread_attr_t when
+// handing off to the underlying __syscall_thread_create - the schedparam
+// priority field is written by pthread_attr_setschedparam() and then never
+// read by anything. So instead of trying to set priority at creation time
+// via attr, each thread sets its own priority as the very first thing it
+// does, using the real Horizon syscall directly on itself via the
+// documented threadGetCurHandle() - this works regardless of whether the
+// thread was created via pthread or libnx's own Thread API.
+static void *switch_thread_priority_trampoline(void *arg)
+{
+	SwitchThreadTrampolineArgs *args = arg;
+	ChiakiThreadFunc func = args->func;
+	void *func_arg = args->arg;
+	free(args);
+	Result prio_rc = svcSetThreadPriority(threadGetCurHandle(), CHIAKI_SWITCH_THREAD_PRIORITY);
+	printf("[THREAD PRIO] probe: svcSetThreadPriority(0x%x) rc=%#x\n", CHIAKI_SWITCH_THREAD_PRIORITY, prio_rc); fflush(stdout);
+	return func(func_arg);
+}
+
 int64_t get_thread_limit()
 {
 	uint64_t resource_limit_handle_value = INVALID_HANDLE;
@@ -31,6 +66,10 @@ int64_t get_thread_limit()
 	svcGetResourceLimitCurrentValue(&thread_cur_value, resource_limit_handle_value, LimitableResource_Threads);
 	svcGetResourceLimitLimitValue(&thread_lim_value, resource_limit_handle_value, LimitableResource_Threads);
 	//printf("thread_cur_value: %lu, thread_lim_value: %lu\n", thread_cur_value, thread_lim_value);
+	// svcGetInfo(InfoType_ResourceLimit) hands back a real kernel object
+	// handle (not a pseudo-handle), same as any handle-returning svc - this
+	// runs on every chiaki_thread_create() call, and went unclosed until now.
+	svcCloseHandle(resource_limit_handle_value);
 	return thread_lim_value - thread_cur_value;
 }
 
@@ -54,6 +93,8 @@ void chiaki_switch_log_resource_limits(const char *tag)
 	}
 	printf("\n");
 	fflush(stdout);
+	// Same unclosed-handle leak as get_thread_limit() above.
+	svcCloseHandle(h);
 }
 #endif
 
@@ -84,24 +125,21 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_create(ChiakiThread *thread, ChiakiT
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 256 * 1024);
-	// Every chiaki worker thread (Takion recv/packet-process, congestion
-	// control, feedback sender, session state machine, ...) previously ran at
-	// libnx's default priority (0x2C), identical to Borealis's main/render
-	// thread. During a motion-triggered burst (e.g. a large I-frame's worth
-	// of UDP packets arriving inside one ~16ms frame interval) that put recv
-	// and rendering on equal footing for the CPU, with no guarantee the
-	// network side would win a timeslice in time to drain the tiny 1MB
-	// kernel UDP buffer before it overflowed. Priority is 0x00 (highest) to
-	// 0x3F (lowest) on Horizon OS; a modest step above the 0x2C default -
-	// still well below the 0x3B special preemptive-multithreading band -
-	// makes these threads always preempt UI/render work without changing
-	// the scheduling model itself.
-	struct sched_param sched = { .sched_priority = 0x2A };
-	pthread_attr_setschedparam(&attr, &sched);
-	int r = pthread_create(&thread->thread, &attr, func, arg);
+	SwitchThreadTrampolineArgs *trampoline_args = malloc(sizeof(SwitchThreadTrampolineArgs));
+	if(!trampoline_args)
+	{
+		pthread_attr_destroy(&attr);
+		return CHIAKI_ERR_MEMORY;
+	}
+	trampoline_args->func = func;
+	trampoline_args->arg = arg;
+	int r = pthread_create(&thread->thread, &attr, switch_thread_priority_trampoline, trampoline_args);
 	pthread_attr_destroy(&attr);
 	if(r != 0)
+	{
+		free(trampoline_args);
 		return CHIAKI_ERR_THREAD;
+	}
 #else
 	int r = pthread_create(&thread->thread, NULL, func, arg);
 	if(r != 0)

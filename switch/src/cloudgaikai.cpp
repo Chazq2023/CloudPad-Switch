@@ -682,19 +682,23 @@ bool CloudGaikai::Step11_PickDatacenter(std::string *out_error)
 	}
 
 	// Real RTT-based ping-and-pick-best (PingDatacenter, further up this
-	// file) is implemented and reachable from here, but disabled for now:
-	// it reliably reproduces a teardown crash in chiaki_takion_close after
-	// completing a full, correct ping (RTT measured successfully every
-	// time) that resisted extensive on-device bisection - see the
-	// switch-build history around commits 974b7e4..942b055 for the full
-	// investigation, including two genuine pre-existing thread-lifecycle
-	// bugs that were found and fixed along the way but did not resolve it.
-	// Falling back to the simple first-listed datacenter with a
-	// conservative guessed MTU so streaming actually works while that's
-	// unresolved. RTT data already captured for the first datacenter
-	// before the crash was a consistently healthy 8-10ms, which doesn't
-	// support "wrong datacenter" as the explanation for the original
-	// motion-triggered packet loss this was meant to test anyway.
+	// file) is implemented and reachable from here, but disabled: it
+	// reliably reproduces a teardown crash after a full, correct ping
+	// (RTT measured successfully every time) that resisted extensive
+	// on-device bisection across two separate debugging sessions (see
+	// switch-build history around 974b7e4..942b055, and the printf-probe
+	// bisection this session that narrowed it to somewhere between two
+	// adjacent, otherwise-unremarkable statements in takion_thread_func's
+	// teardown without finding a cause - consistent with the fault actually
+	// being on a different, concurrently-running thread rather than in the
+	// code the probes bracket). Empirically, across every test this session,
+	// the first-listed datacenter was consistently 'lonb' (London, correct
+	// for this account's region) - Sony's API appears to already order
+	// candidates by proximity server-side, so blindly taking the first one
+	// has been reliable in practice. A settings-screen datacenter picker
+	// populated from this same list (no pinging required) is worth adding
+	// for visibility/manual override; see cloudgaikai.h for the full
+	// datacenter list this endpoint already returns.
 	int datacenter_count = json_object_array_length(datacenters);
 	json_object *first = json_object_array_get_idx(datacenters, 0);
 	selected_datacenter = JsonGetString(first, "dataCenter");

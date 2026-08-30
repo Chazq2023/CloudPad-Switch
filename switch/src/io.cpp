@@ -6,6 +6,8 @@
 #include <chrono>
 #include <thread>
 
+#include <switch.h>
+
 // https://github.com/torvalds/linux/blob/41ba50b0572e90ed3d24fe4def54567e9050bc47/drivers/hid/hid-sony.c#L2742
 #define DS4_TRACKPAD_MAX_X 1920
 #define DS4_TRACKPAD_MAX_Y 942
@@ -260,6 +262,16 @@ bool IO::VideoCB(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_
 
 void IO::VideoDecodeThreadFunc()
 {
+	// This is a raw std::thread, not one of lib/'s chiaki_thread_create'd
+	// worker threads, so it never picked up the priority elevation applied
+	// there (see lib/src/thread.c) - it ran at the same default priority as
+	// Borealis's UI/render thread, with no guarantee of winning a timeslice
+	// over it during motion. Decode falling behind under that contention
+	// fills this thread's own bounded 8-frame queue (see VideoCB) and starts
+	// dropping frames, which reads as exactly the lagging/artifacting this
+	// was meant to fix. Same priority as the network worker threads, for the
+	// same reason: this thread also must not lose CPU time to UI rendering.
+	svcSetThreadPriority(threadGetCurHandle(), 0x2A);
 	while(true)
 	{
 		QueuedVideoFrame queued;
@@ -425,10 +437,18 @@ void IO::AudioCB(int16_t *buf, size_t samples_count)
 	}
 
 	int audio_queued_size = SDL_GetQueuedAudioSize(this->sdl_audio_device_id);
-	if(audio_queued_size > 16000)
+	// Hard-clears the whole queue (an audible pop every time it fires) once
+	// backlog gets excessive, to bound worst-case audio delay during a real
+	// stall/catch-up. The original 16000-byte threshold left only ~15ms of
+	// margin over the ~13000 bytes (~68ms) this queue normally sits at
+	// (48kHz/16-bit/stereo), so on Cloud Play - where measured RTT swings
+	// from ~10ms to 200ms+ well within normal operation - routine jitter
+	// alone crossed it constantly, producing frequent audible crackles that
+	// had nothing to do with actual network loss. 96000 bytes (~500ms) still
+	// bounds runaway latency during a genuine stall, but gives enough
+	// headroom that normal jitter on this link doesn't trigger it.
+	if(audio_queued_size > 96000)
 	{
-		// clear audio queue to avoid big audio delay
-		// average values are close to 13000 bytes
 		CHIAKI_LOGW(this->log, "Triggering SDL_ClearQueuedAudio with queue size = %d", audio_queued_size);
 		SDL_ClearQueuedAudio(this->sdl_audio_device_id);
 	}
