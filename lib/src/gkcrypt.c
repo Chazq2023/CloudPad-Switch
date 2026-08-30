@@ -496,6 +496,9 @@ static void *gkcrypt_thread_func(void *user)
 {
 	ChiakiGKCrypt *gkcrypt = user;
 	CHIAKI_LOGV(gkcrypt->log, "GKCrypt %d thread starting", (int)gkcrypt->index);
+#ifdef __SWITCH__
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("GKCrypt");
+#endif
 
 	ChiakiErrorCode err = chiaki_mutex_lock(&gkcrypt->key_buf_mutex);
 	assert(err == CHIAKI_ERR_SUCCESS);
@@ -536,6 +539,9 @@ static void *gkcrypt_thread_func(void *user)
 		err = gkcrypt_generate_next_chunk(gkcrypt);
 		if(err != CHIAKI_ERR_SUCCESS)
 			break;
+#ifdef __SWITCH__
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
+#endif
 	}
 
 	chiaki_mutex_unlock(&gkcrypt->key_buf_mutex);

@@ -244,6 +244,9 @@ static bool state_cond_check(void *user)
 static void *feedback_sender_thread_func(void *user)
 {
 	ChiakiFeedbackSender *feedback_sender = user;
+#ifdef __SWITCH__
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("Feedback Sender");
+#endif
 
 	ChiakiErrorCode err = chiaki_mutex_lock(&feedback_sender->state_mutex);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -281,6 +284,9 @@ static void *feedback_sender_thread_func(void *user)
 			feedback_sender_send_history(feedback_sender);
 
 		feedback_sender->controller_state_prev = feedback_sender->controller_state;
+#ifdef __SWITCH__
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
+#endif
 	}
 
 	chiaki_mutex_unlock(&feedback_sender->state_mutex);

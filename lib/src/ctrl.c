@@ -316,6 +316,9 @@ static void ctrl_failed(ChiakiCtrl *ctrl, ChiakiQuitReason reason)
 static void *ctrl_thread_func(void *user)
 {
 	ChiakiCtrl *ctrl = user;
+#ifdef __SWITCH__
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("Ctrl");
+#endif
 
 	ChiakiErrorCode err = chiaki_mutex_lock(&ctrl->notif_mutex);
 	assert(err == CHIAKI_ERR_SUCCESS);
@@ -369,6 +372,9 @@ static void *ctrl_thread_func(void *user)
 		else
 			err = chiaki_stop_pipe_select_single(&ctrl->notif_pipe, ctrl->sock, false, UINT64_MAX);
 		chiaki_mutex_lock(&ctrl->notif_mutex);
+#ifdef __SWITCH__
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
+#endif
 
 		bool msg_queue_updated = false;
 		if(err == CHIAKI_ERR_CANCELED)

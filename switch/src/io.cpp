@@ -297,6 +297,7 @@ void IO::CpuSampleThreadFunc()
 		prev_tick = now_tick;
 
 		printf("[CPU PROBE] probe: busy%%");
+		double total_pct = 0.0;
 		for(int core = 0; core < kCoreCount; core++)
 		{
 			uint64_t idle = 0;
@@ -305,7 +306,12 @@ void IO::CpuSampleThreadFunc()
 			prev_idle[core] = idle;
 			double busy_pct = elapsed > 0 ? 100.0 * (1.0 - (double)idle_delta / (double)elapsed) : 0.0;
 			printf(" core%d=%.1f", core, busy_pct);
+			total_pct += busy_pct;
 		}
+		// Average across cores - the single number an overlay-style monitor
+		// (e.g. sys-clk) typically reports, so this can be compared directly
+		// against a user-reported "CPU%" reading rather than per-core numbers.
+		printf(" avg=%.1f", total_pct / kCoreCount);
 		printf("\n");
 
 		printf("[CPU PROBE THREADS] probe:");

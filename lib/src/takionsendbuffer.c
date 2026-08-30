@@ -216,6 +216,9 @@ static bool takion_send_buffer_check_pred_no_packets(void *user)
 static void *takion_send_buffer_thread_func(void *user)
 {
 	ChiakiTakionSendBuffer *send_buffer = user;
+#ifdef __SWITCH__
+	int cpu_sample_idx = chiaki_switch_register_thread_for_sampling("Takion Send Buffer");
+#endif
 
 	ChiakiErrorCode err = chiaki_mutex_lock(&send_buffer->mutex);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -235,6 +238,9 @@ static void *takion_send_buffer_thread_func(void *user)
 			break;
 
 		takion_send_buffer_resend(send_buffer);
+#ifdef __SWITCH__
+		chiaki_switch_self_report_ticks(cpu_sample_idx);
+#endif
 	}
 	chiaki_mutex_unlock(&send_buffer->mutex);
 
