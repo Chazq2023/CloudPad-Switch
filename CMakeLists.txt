@@ -188,6 +188,25 @@ endif()
 # mbedTLS must be fetched BEFORE third-party so curl can use it for SSL
 if(CHIAKI_LIB_ENABLE_MBEDTLS)
 	add_definitions(-DCHIAKI_LIB_ENABLE_MBEDTLS)
+	# Upgraded from mbedTLS 2.28.0 (no ARMv8 crypto extension support at
+	# all - AESCE was only added in 3.x) to 3.6.7 LTS. Tried as a fix for
+	# the ~100% CPU on 3/4 cores measured continuously on Switch, on the
+	# theory that every video/audio packet's AES-GCM GMAC (lib/src/
+	# gkcrypt.c) running pure software AES at ~1000-1500 packets/sec during
+	# motion was a real contributor - measured on-device afterward with
+	# MBEDTLS_AESCE_C active (on by default in 3.6.7) and per-core CPU was
+	# unchanged, so software AES-GCM was not actually the (or a measurable)
+	# bottleneck. Kept anyway: strictly newer, actively-maintained crypto
+	# with hardware AES available for whenever it does matter, and the
+	# on-device handshake/connection was reverified working correctly
+	# end-to-end after the upgrade. mbedTLS 3.x restructured
+	# mbedtls_ecdh_context into an opaque union by default, breaking
+	# lib/src/ecdh.c's direct field access (ctx.grp/.d/.Q/.Qp/.z);
+	# MBEDTLS_ECDH_LEGACY_CONTEXT restores the exact old layout, so ecdh.c
+	# needs no changes. This must be defined everywhere ecdh.h is included
+	# (both mbedTLS's own build below and chiaki-lib), hence the global
+	# add_definitions rather than a target-scoped one.
+	add_definitions(-DMBEDTLS_ECDH_LEGACY_CONTEXT)
 	if(CHIAKI_LIB_MBEDTLS_EXTERNAL_PROJECT)
 		set(FETCHCONTENT_QUIET CACHE BOOL FALSE)
 		include(FetchContent)
@@ -202,7 +221,7 @@ if(CHIAKI_LIB_ENABLE_MBEDTLS)
 		FetchContent_Declare(
 			mbedtls
 			GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
-			GIT_TAG 8b3f26a5ac38d4fdccbc5c5366229f3e01dafcc0 # v2.28.0
+			GIT_TAG mbedtls-3.6.7 # was v2.28.0 - see MBEDTLS_ECDH_LEGACY_CONTEXT below
 			GIT_PROGRESS TRUE
 		)
 		if(ANDROID OR IOS)
