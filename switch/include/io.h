@@ -152,6 +152,13 @@ class IO
 		void VideoDecodeThreadFunc();
 		bool DecodeFrame(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered);
 
+		// Diagnostic only: periodically logs per-core CPU busy% (from
+		// InfoType_IdleTickCount) while streaming, to find out what's
+		// actually driving reported ~98% CPU usage rather than guessing.
+		std::thread cpu_sample_thread;
+		bool cpu_sample_thread_running = false;
+		void CpuSampleThreadFunc();
+
 		bool InitOpenGl();
 		bool InitOpenGlTextures();
 		bool InitOpenGlTX1Textures();

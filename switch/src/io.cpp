@@ -260,6 +260,45 @@ bool IO::VideoCB(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_
 	return true;
 }
 
+void IO::CpuSampleThreadFunc()
+{
+	// InfoType_IdleTickCount gives idle ticks accumulated per core since
+	// boot; armGetSystemTick() is the same underlying ARM generic timer, so
+	// (1 - delta_idle/delta_elapsed) over a sampling window is that core's
+	// busy fraction. No handle wiring to individual threads needed - this
+	// just answers "is the CPU actually maxed, and on which core(s)" before
+	// guessing what code is responsible.
+	static const int kCoreCount = 4;
+	uint64_t prev_idle[kCoreCount] = {0};
+	uint64_t prev_tick = armGetSystemTick();
+	for(int core = 0; core < kCoreCount; core++)
+		svcGetInfo(&prev_idle[core], InfoType_IdleTickCount, INVALID_HANDLE, core);
+
+	while(this->cpu_sample_thread_running)
+	{
+		std::this_thread::sleep_for(std::chrono::seconds(1));
+		if(!this->cpu_sample_thread_running)
+			break;
+
+		uint64_t now_tick = armGetSystemTick();
+		uint64_t elapsed = now_tick - prev_tick;
+		prev_tick = now_tick;
+
+		printf("[CPU PROBE] probe: busy%%");
+		for(int core = 0; core < kCoreCount; core++)
+		{
+			uint64_t idle = 0;
+			svcGetInfo(&idle, InfoType_IdleTickCount, INVALID_HANDLE, core);
+			uint64_t idle_delta = idle - prev_idle[core];
+			prev_idle[core] = idle;
+			double busy_pct = elapsed > 0 ? 100.0 * (1.0 - (double)idle_delta / (double)elapsed) : 0.0;
+			printf(" core%d=%.1f", core, busy_pct);
+		}
+		printf("\n");
+		fflush(stdout);
+	}
+}
+
 void IO::VideoDecodeThreadFunc()
 {
 	// This is a raw std::thread, not one of lib/'s chiaki_thread_create'd
@@ -329,6 +368,14 @@ send_packet:
 	if (enableHWAccl) {
 		r = avcodec_receive_frame(this->codec_context, this->tmp_frame);
 		if (r == 0) {
+			static bool logged_format_once = false;
+			if(!logged_format_once)
+			{
+				logged_format_once = true;
+				CHIAKI_LOGI(this->log, "[HWACCEL PROBE] first decoded frame format=%d (AV_PIX_FMT_NVTEGRA=%d) - %s",
+					this->tmp_frame->format, AV_PIX_FMT_NVTEGRA,
+					this->tmp_frame->format == AV_PIX_FMT_NVTEGRA ? "hardware decode active" : "still software decode");
+			}
 			if (av_hwframe_transfer_data(this->frames[next_frame], this->tmp_frame, 0) < 0) {
 				CHIAKI_LOGI(this->log, "transfer error");
 			}
@@ -508,12 +555,21 @@ bool IO::InitVideo(int video_width, int video_height, int screen_width, int scre
 	this->video_decode_thread_running = true;
 	this->video_decode_thread = std::thread(&IO::VideoDecodeThreadFunc, this);
 
+	this->cpu_sample_thread_running = true;
+	this->cpu_sample_thread = std::thread(&IO::CpuSampleThreadFunc, this);
+
 	return true;
 }
 
 bool IO::FreeVideo()
 {
 	bool ret = true;
+
+	if(this->cpu_sample_thread.joinable())
+	{
+		this->cpu_sample_thread_running = false;
+		this->cpu_sample_thread.join();
+	}
 
 	if(this->video_decode_thread.joinable())
 	{
@@ -995,6 +1051,34 @@ bool IO::InitAVCodec(bool is_PS5)
 		this->codec_context->skip_loop_filter = AVDISCARD_ALL;
 		this->codec_context->flags |= AV_CODEC_FLAG_LOW_DELAY;
 		this->codec_context->flags2 |= AV_CODEC_FLAG2_FAST;
+
+		// Both of these must happen BEFORE avcodec_open2(), not after: the
+		// decoder decides whether it can attach a hwaccel (ff_hevc_nvtegra_
+		// hwaccel / ff_h264_nvtegra_hwaccel - both genuinely compiled into
+		// this toolchain's libavcodec.a) during its own init, which runs
+		// inside avcodec_open2() itself. hw_device_ctx used to be attached
+		// AFTER avcodec_open2() had already returned, and get_format was
+		// never set at all - between the two, the decoder had no way to
+		// ever select AV_PIX_FMT_NVTEGRA, so despite hw_device_ctx being
+		// created "successfully", every frame was silently decoded in
+		// software the entire time (auto-threaded across every core - the
+		// real explanation for ~100% CPU on 3/4 cores continuously, not just
+		// during motion). get_format is the standard FFmpeg mechanism a
+		// decoder uses to ask which of several offered pixel formats to
+		// decode into; returning AV_PIX_FMT_NVTEGRA when it's offered is
+		// what actually makes the codec pick up the linked-in hwaccel.
+		if(av_hwdevice_ctx_create(&this->hw_device_ctx, AV_HWDEVICE_TYPE_NVTEGRA, NULL, NULL, 0) < 0) {
+			throw Exception("Failed to enable hardware encoding");
+		}
+		this->codec_context->hw_device_ctx = av_buffer_ref(this->hw_device_ctx);
+		this->codec_context->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) -> AVPixelFormat {
+			for(const enum AVPixelFormat *p = pix_fmts; *p != AV_PIX_FMT_NONE; p++)
+			{
+				if(*p == AV_PIX_FMT_NVTEGRA)
+					return *p;
+			}
+			return avcodec_default_get_format(ctx, pix_fmts);
+		};
 	} else {
 		// use rock88's mooxlight-nx optimization
 		// https://github.com/rock88/moonlight-nx/blob/698d138b9fdd4e483c998254484ccfb4ec829e95/src/streaming/ffmpeg/FFmpegVideoDecoder.cpp#L63
@@ -1010,13 +1094,6 @@ bool IO::InitAVCodec(bool is_PS5)
 	{
 		avcodec_free_context(&this->codec_context);
 		throw Exception("Failed to open codec context");
-	}
-
-	if (enableHWAccl) {
-		if(av_hwdevice_ctx_create(&this->hw_device_ctx, AV_HWDEVICE_TYPE_NVTEGRA, NULL, NULL, 0) < 0) {
-			throw Exception("Failed to enable hardware encoding");
-		}
-		this->codec_context->hw_device_ctx = av_buffer_ref(this->hw_device_ctx);
 	}
 	return true;
 }
