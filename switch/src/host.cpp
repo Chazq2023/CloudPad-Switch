@@ -48,6 +48,7 @@ Host::~Host()
 
 int Host::InitSession(IO *user)
 {
+	user->SetPS3Stream(this->IsPS3());
 	chiaki_connect_video_profile_preset(&(this->video_profile),
 		this->video_resolution, this->video_fps);
 	// Override the resolution preset's default bitrate if the user picked a
@@ -151,6 +152,7 @@ void Host::SetCloudConnectInfo(ChiakiServiceType service_type, std::string platf
 	uint32_t mtu_in, uint32_t mtu_out, uint64_t rtt_us)
 {
 	this->cloud_mode = true;
+	this->cloud_platform = platform;
 	this->cloud_service_type = service_type;
 	this->cloud_server_addr = server_addr;
 	this->cloud_server_port = server_port;
@@ -312,4 +314,9 @@ bool Host::IsPS5()
 		return true;
 	else
 		return false;
+}
+
+bool Host::IsPS3()
+{
+	return this->cloud_mode && this->cloud_platform == "ps3";
 }

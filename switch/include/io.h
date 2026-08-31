@@ -119,6 +119,24 @@ class IO
 		uint64_t pacing_last_decode_ms = 0;
 		uint32_t pacing_phase = 0;
 
+#ifdef __SWITCH__
+		enum class SyntheticTouchMode { NONE, TAP, SWIPE, HOLD };
+		bool ps3_stream = false;
+		uint32_t minus_held_frames = 0;
+		bool minus_combo_triggered = false;
+		SyntheticTouchMode synthetic_touch_mode = SyntheticTouchMode::NONE;
+		int8_t synthetic_touch_id = -1;
+		uint32_t synthetic_touch_frame = 0;
+		uint16_t synthetic_touch_start_x = 960;
+		uint16_t synthetic_touch_start_y = 471;
+		uint16_t synthetic_touch_end_x = 960;
+		uint16_t synthetic_touch_end_y = 471;
+		void StartSyntheticTouch(ChiakiControllerState *state, SyntheticTouchMode mode,
+			uint16_t start_x, uint16_t start_y, uint16_t end_x, uint16_t end_y);
+		void UpdateSyntheticTouch(ChiakiControllerState *state);
+		void ApplyCloudPadControllerMapping(ChiakiControllerState *state, u64 held, u64 down, u64 up);
+#endif
+
 		// Decode runs on a dedicated thread instead of inline on the Takion
 		// network-receive thread. VideoCB (called from that network thread) used
 		// to call avcodec_send_packet/avcodec_receive_frame directly - during
@@ -221,6 +239,7 @@ class IO
 		void SetSharpenLevel(int level);
 		// See video_pacing_smooth above.
 		void SetVideoPacing(bool smooth);
+		void SetPS3Stream(bool is_ps3);
 };
 
 #endif //CHIAKI_IO_H

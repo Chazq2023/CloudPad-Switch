@@ -112,39 +112,19 @@ void MainApplication::BuildAccountMenu(brls::List *ls)
 		"Stream settings", true);
 	ls->addView(stream_info);
 
-	int value;
-	ChiakiVideoFPSPreset fps_preset = this->settings->GetVideoFPS(nullptr);
-	switch(fps_preset)
-	{
-		case CHIAKI_VIDEO_FPS_PRESET_60:
-			value = 0;
-			break;
-		case CHIAKI_VIDEO_FPS_PRESET_30:
-			value = 1;
-			break;
-	}
+	brls::ListItem *ps5_resolution = new brls::ListItem("PS5 Library resolution");
+	ps5_resolution->setValue("1080p");
+	ls->addView(ps5_resolution);
 
-	brls::SelectListItem *fps = new brls::SelectListItem(
-		"FPS", { "60fps", "30fps" }, value);
+	brls::ListItem *ps4_resolution = new brls::ListItem("PS4 Catalog resolution");
+	ps4_resolution->setValue("720p");
+	ls->addView(ps4_resolution);
 
-	auto fps_cb = [this](int result) {
-		ChiakiVideoFPSPreset value = CHIAKI_VIDEO_FPS_PRESET_60;
-		switch(result)
-		{
-			case 0:
-				value = CHIAKI_VIDEO_FPS_PRESET_60;
-				break;
-			case 1:
-				value = CHIAKI_VIDEO_FPS_PRESET_30;
-				break;
-		}
-		this->settings->SetVideoFPS(nullptr, value);
-		this->settings->WriteFile();
-	};
-	fps->getValueSelectedEvent()->subscribe(fps_cb);
-	ls->addView(fps);
+	brls::ListItem *ps3_resolution = new brls::ListItem("PS3 Catalog resolution");
+	ps3_resolution->setValue("720p");
+	ls->addView(ps3_resolution);
 
-	value = this->settings->GetHaptic(nullptr);
+	int value = this->settings->GetHaptic(nullptr);
 	brls::SelectListItem *haptic = new brls::SelectListItem(
 		"Haptics", { "Disabled", "Weak", "Strong" }, value);
 

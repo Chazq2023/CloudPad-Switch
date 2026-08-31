@@ -601,8 +601,9 @@ bool IO::InitVideo(int video_width, int video_height, int screen_width, int scre
 	this->video_decode_thread_running = true;
 	this->video_decode_thread = std::thread(&IO::VideoDecodeThreadFunc, this);
 
-	this->cpu_sample_thread_running = true;
-	this->cpu_sample_thread = std::thread(&IO::CpuSampleThreadFunc, this);
+	// Keep diagnostic sampling compiled in but disabled in normal builds. Its
+	// once-per-second stdout traffic is useful while profiling, not streaming.
+	this->cpu_sample_thread_running = false;
 
 	return true;
 }
@@ -1010,10 +1011,8 @@ bool IO::ReadGameKeys(SDL_Event *event, ChiakiControllerState *state)
 				case 10:
 					state->buttons |= CHIAKI_CONTROLLER_BUTTON_OPTIONS;
 					break; // KEY_PLUS
-				// FIXME
-				// case 11: state->buttons |= CHIAKI_CONTROLLER_BUTTON_SHARE; break; // KEY_MINUS
 				case 11:
-					state->buttons |= CHIAKI_CONTROLLER_BUTTON_PS;
+					state->buttons |= CHIAKI_CONTROLLER_BUTTON_SHARE;
 					break; // KEY_MINUS
 				default:
 					ret = false;
@@ -1025,16 +1024,16 @@ bool IO::ReadGameKeys(SDL_Event *event, ChiakiControllerState *state)
 			switch(event->jbutton.button)
 			{
 				case 0:
-					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_MOON;
+					state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_MOON;
 					break; // KEY_A
 				case 1:
-					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_CROSS;
+					state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_CROSS;
 					break; // KEY_B
 				case 2:
-					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_PYRAMID;
+					state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_PYRAMID;
 					break; // KEY_X
 				case 3:
-					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_BOX;
+					state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_BOX;
 					break; // KEY_Y
 				case 12:
 					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_DPAD_LEFT;
@@ -1067,11 +1066,10 @@ bool IO::ReadGameKeys(SDL_Event *event, ChiakiControllerState *state)
 					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_R3;
 					break; // KEY_RSTICK
 				case 10:
-					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_OPTIONS;
+					state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_OPTIONS;
 					break; // KEY_PLUS
-						   //case 11: state->buttons ^= CHIAKI_CONTROLLER_BUTTON_SHARE; break; // KEY_MINUS
 				case 11:
-					state->buttons ^= CHIAKI_CONTROLLER_BUTTON_PS;
+					state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_SHARE;
 					break; // KEY_MINUS
 				default:
 					ret = false;
@@ -1080,6 +1078,7 @@ bool IO::ReadGameKeys(SDL_Event *event, ChiakiControllerState *state)
 		default:
 			ret = false;
 	}
+
 	return ret;
 }
 
@@ -1101,9 +1100,20 @@ bool IO::InitAVCodec(bool is_PS5)
 		throw Exception("Failed to alloc codec context");
 
 	if (enableHWAccl) {
-		this->codec_context->skip_loop_filter = AVDISCARD_ALL;
 		this->codec_context->flags |= AV_CODEC_FLAG_LOW_DELAY;
-		this->codec_context->flags2 |= AV_CODEC_FLAG2_FAST;
+		if(is_PS5)
+		{
+			this->codec_context->skip_loop_filter = AVDISCARD_ALL;
+			this->codec_context->flags2 |= AV_CODEC_FLAG2_FAST;
+		}
+		else
+		{
+			// H.264 block damage is much more visible with deblocking disabled,
+			// especially after a failed FEC recovery. NVDEC performs the filter
+			// in hardware, so retain quality/error resilience without a CPU cost.
+			this->codec_context->skip_loop_filter = AVDISCARD_DEFAULT;
+			this->codec_context->err_recognition = AV_EF_CAREFUL;
+		}
 
 		// Both of these must happen BEFORE avcodec_open2(), not after: the
 		// decoder decides whether it can attach a hwaccel (ff_hevc_nvtegra_
@@ -1457,7 +1467,9 @@ inline void IO::OpenGlDraw()
 
 	D(glDrawArrays(GL_TRIANGLE_STRIP, 0, 4));
 	D(glBindVertexArray(0));
-	D(glFinish());
+	// Borealis calls glfwSwapBuffers() immediately after this frame. Forcing a
+	// full finish here made the CPU busy-wait for the GPU before that swap.
+	D(glFlush());
 }
 
 bool IO::InitController()
@@ -1528,16 +1540,166 @@ bool IO::FreeController()
 	return true;
 }
 
+#ifdef __SWITCH__
+void IO::SetPS3Stream(bool is_ps3)
+{
+	this->ps3_stream = is_ps3;
+	this->minus_held_frames = 0;
+	this->minus_combo_triggered = false;
+	this->synthetic_touch_mode = SyntheticTouchMode::NONE;
+	this->synthetic_touch_id = -1;
+}
+
+void IO::StartSyntheticTouch(ChiakiControllerState *state, SyntheticTouchMode mode,
+	uint16_t start_x, uint16_t start_y, uint16_t end_x, uint16_t end_y)
+{
+	if(this->synthetic_touch_id >= 0)
+		chiaki_controller_state_stop_touch(state, (uint8_t)this->synthetic_touch_id);
+
+	this->synthetic_touch_mode = mode;
+	this->synthetic_touch_frame = 0;
+	this->synthetic_touch_start_x = start_x;
+	this->synthetic_touch_start_y = start_y;
+	this->synthetic_touch_end_x = end_x;
+	this->synthetic_touch_end_y = end_y;
+	this->synthetic_touch_id = chiaki_controller_state_start_touch(state, start_x, start_y);
+	if(this->synthetic_touch_id < 0)
+		this->synthetic_touch_mode = SyntheticTouchMode::NONE;
+}
+
+void IO::UpdateSyntheticTouch(ChiakiControllerState *state)
+{
+	if(this->synthetic_touch_mode == SyntheticTouchMode::NONE || this->synthetic_touch_id < 0)
+		return;
+
+	this->synthetic_touch_frame++;
+	if(this->synthetic_touch_mode == SyntheticTouchMode::TAP || this->synthetic_touch_mode == SyntheticTouchMode::HOLD)
+		state->buttons |= CHIAKI_CONTROLLER_BUTTON_TOUCHPAD;
+
+	if(this->synthetic_touch_mode == SyntheticTouchMode::SWIPE && this->synthetic_touch_frame >= 4)
+		chiaki_controller_state_set_touch_pos(state, (uint8_t)this->synthetic_touch_id,
+			this->synthetic_touch_end_x, this->synthetic_touch_end_y);
+
+	bool finished = (this->synthetic_touch_mode == SyntheticTouchMode::TAP && this->synthetic_touch_frame >= 5)
+		|| (this->synthetic_touch_mode == SyntheticTouchMode::SWIPE && this->synthetic_touch_frame >= 9);
+	if(finished)
+	{
+		chiaki_controller_state_stop_touch(state, (uint8_t)this->synthetic_touch_id);
+		state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_TOUCHPAD;
+		this->synthetic_touch_id = -1;
+		this->synthetic_touch_mode = SyntheticTouchMode::NONE;
+	}
+}
+
+void IO::ApplyCloudPadControllerMapping(ChiakiControllerState *state, u64 held, u64 down, u64 up)
+{
+	const bool minus_held = (held & HidNpadButton_Minus) != 0;
+	const bool home_held = minus_held && (held & HidNpadButton_Plus);
+
+	// PS3 has no touchpad: Minus is Select/Share. Minus + Plus remains PS Home
+	// so cloud PS3 sessions can open the XMB menu.
+	if(this->ps3_stream)
+	{
+		if(home_held)
+		{
+			state->buttons &= ~(CHIAKI_CONTROLLER_BUTTON_SHARE | CHIAKI_CONTROLLER_BUTTON_OPTIONS);
+			state->buttons |= CHIAKI_CONTROLLER_BUTTON_PS;
+		}
+		else
+		{
+			state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_PS;
+			if(minus_held)
+				state->buttons |= CHIAKI_CONTROLLER_BUTTON_SHARE;
+		}
+		return;
+	}
+
+	// PS4/PS5 use Minus as CloudPad's Select modifier. A quick press clicks
+	// the touchpad; holding it alone becomes a sustained touchpad click.
+	state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_SHARE;
+	if(down & HidNpadButton_Minus)
+	{
+		this->minus_held_frames = 0;
+		this->minus_combo_triggered = false;
+	}
+
+	if(minus_held)
+	{
+		this->minus_held_frames++;
+		uint32_t suppress = 0;
+		if(held & HidNpadButton_L) suppress |= CHIAKI_CONTROLLER_BUTTON_L1;
+		if(held & HidNpadButton_R) suppress |= CHIAKI_CONTROLLER_BUTTON_R1;
+		if(held & HidNpadButton_X) suppress |= CHIAKI_CONTROLLER_BUTTON_PYRAMID;
+		if(held & HidNpadButton_Y) suppress |= CHIAKI_CONTROLLER_BUTTON_BOX;
+		if(held & HidNpadButton_A) suppress |= CHIAKI_CONTROLLER_BUTTON_MOON;
+		if(held & HidNpadButton_B) suppress |= CHIAKI_CONTROLLER_BUTTON_CROSS;
+		state->buttons &= ~suppress;
+
+		auto start_combo = [this, state](SyntheticTouchMode mode,
+			uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey) {
+			this->minus_combo_triggered = true;
+			this->StartSyntheticTouch(state, mode, sx, sy, ex, ey);
+		};
+		if(down & HidNpadButton_L) start_combo(SyntheticTouchMode::TAP, 480, 471, 480, 471);
+		else if(down & HidNpadButton_R) start_combo(SyntheticTouchMode::TAP, 1440, 471, 1440, 471);
+		else if(down & HidNpadButton_X) start_combo(SyntheticTouchMode::SWIPE, 960, 471, 960, 120);
+		else if(down & HidNpadButton_Y) start_combo(SyntheticTouchMode::SWIPE, 960, 471, 250, 471);
+		else if(down & HidNpadButton_A) start_combo(SyntheticTouchMode::SWIPE, 960, 471, 1670, 471);
+		else if(down & HidNpadButton_B) start_combo(SyntheticTouchMode::SWIPE, 960, 471, 960, 820);
+		else if(down & HidNpadButton_Plus)
+			this->minus_combo_triggered = true;
+
+		if(home_held)
+		{
+			state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_OPTIONS;
+			state->buttons |= CHIAKI_CONTROLLER_BUTTON_PS;
+		}
+		else
+			state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_PS;
+
+		// Roughly 300 ms at 60 FPS separates a click from click-and-hold.
+		if(!this->minus_combo_triggered && this->minus_held_frames == 18)
+			this->StartSyntheticTouch(state, SyntheticTouchMode::HOLD, 960, 471, 960, 471);
+	}
+
+	if(up & HidNpadButton_Minus)
+	{
+		if(this->synthetic_touch_mode == SyntheticTouchMode::HOLD && this->synthetic_touch_id >= 0)
+		{
+			chiaki_controller_state_stop_touch(state, (uint8_t)this->synthetic_touch_id);
+			state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_TOUCHPAD;
+			this->synthetic_touch_id = -1;
+			this->synthetic_touch_mode = SyntheticTouchMode::NONE;
+		}
+		else if(!this->minus_combo_triggered && this->minus_held_frames < 18)
+			this->StartSyntheticTouch(state, SyntheticTouchMode::TAP, 960, 471, 960, 471);
+
+		this->minus_held_frames = 0;
+		this->minus_combo_triggered = false;
+		state->buttons &= ~CHIAKI_CONTROLLER_BUTTON_PS;
+	}
+
+	UpdateSyntheticTouch(state);
+}
+#else
+void IO::SetPS3Stream(bool is_ps3)
+{
+	(void)is_ps3;
+}
+#endif
+
 void IO::UpdateControllerState(ChiakiControllerState *state, std::map<uint32_t, int8_t> *finger_id_touch_id)
 {
 #ifdef __SWITCH__
 	padUpdate(&this->pad);
+	u64 held = padGetButtons(&this->pad);
+	u64 down = padGetButtonsDown(&this->pad);
+	u64 up = padGetButtonsUp(&this->pad);
 	// ZL+ZR+Plus: exit the stream cleanly back to the app's own main menu,
 	// without needing to wait for a server-side disconnect. Held-together
 	// combo (not a single button) so it can't be triggered accidentally
 	// during normal play.
 	{
-		u64 held = padGetButtons(&this->pad);
 		if((held & HidNpadButton_ZL) && (held & HidNpadButton_ZR) && (held & HidNpadButton_Plus))
 			this->exit_stream_requested.store(true);
 	}
@@ -1555,6 +1717,9 @@ void IO::UpdateControllerState(ChiakiControllerState *state, std::map<uint32_t, 
 
 	ReadGameTouchScreen(state, finger_id_touch_id);
 	ReadGameSixAxis(state);
+#ifdef __SWITCH__
+	ApplyCloudPadControllerMapping(state, held, down, up);
+#endif
 }
 
 bool IO::MainLoop()

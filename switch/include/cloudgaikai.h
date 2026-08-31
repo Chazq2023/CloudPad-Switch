@@ -47,8 +47,10 @@ class CloudGaikai
 		// resolution_height: 720/1080/1440/2160, forwarded to Sony's encoder
 		// (independent of the resolution chiaki's own client-side decode path
 		// is configured for - the two should be kept in sync by the caller).
+		// bitrate_kbps is advertised in both the game specification and the
+		// allocation network measurements so Sony's encoder sees one cap.
 		CloudGaikai(ChiakiLog *log, std::string duid, std::string service_type, std::string platform,
-			std::string npsso, std::string entitlement_id, int resolution_height);
+			std::string npsso, std::string entitlement_id, int resolution_height, int bitrate_kbps);
 		~CloudGaikai();
 
 		// progress_cb is invoked with human-readable status strings as
@@ -64,6 +66,7 @@ class CloudGaikai
 		std::string npsso;
 		std::string entitlement_id;
 		int resolution_height;
+		int bitrate_kbps;
 
 		std::string virt_type;
 		std::string account_base_url;

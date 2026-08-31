@@ -27,7 +27,7 @@ static void *congestion_control_thread_func(void *user)
 		ChiakiTakionCongestionPacket packet = { 0 };
 		uint64_t total = received + lost;
 		control->packet_loss = total > 0 ? (double)lost / total : 0;
-		CHIAKI_LOGI(control->takion->log, "PACKET_LOSS_DETAIL measured_loss=%.4f received=%llu lost=%llu total=%llu",
+		CHIAKI_LOGV(control->takion->log, "PACKET_LOSS_DETAIL measured_loss=%.4f received=%llu lost=%llu total=%llu",
 			control->packet_loss, (unsigned long long)received, (unsigned long long)lost, (unsigned long long)total);
 		if(control->packet_loss > control->packet_loss_max)
 		{

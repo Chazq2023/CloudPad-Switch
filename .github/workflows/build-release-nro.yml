@@ -1,0 +1,59 @@
+name: Build CloudPad NRO Release
+
+on:
+  push:
+    branches:
+      - switch-build
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release-nro:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Read release version
+        run: |
+          VERSION=$(sed -n 's/^## //p' RELEASE_NOTES.md | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::No release heading found in RELEASE_NOTES.md"
+            exit 1
+          fi
+          TAG=$(printf '%s' "$VERSION" | tr ' ' '-')
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+
+      - name: Build cloudpad.nro
+        env:
+          CLOUDPAD_SWITCH_VERSION: ${{ env.VERSION }}
+        run: |
+          docker run --rm \
+            -e CLOUDPAD_SWITCH_VERSION \
+            -v "${GITHUB_WORKSPACE}:/build/chiaki" \
+            -w /build/chiaki \
+            docker.io/xlanor/chiaki-ng-switch-builder:latest \
+            /bin/bash -c "scripts/switch/build.sh"
+
+          test -f build_switch/switch/cloudpad.nro
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudpad-nro-${{ env.TAG }}
+          path: build_switch/switch/cloudpad.nro
+
+      - name: Create or update NRO release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: CloudPad Switch ${{ env.VERSION }}
+          body_path: RELEASE_NOTES.md
+          files: build_switch/switch/cloudpad.nro
+          make_latest: true

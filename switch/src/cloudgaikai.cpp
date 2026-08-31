@@ -184,9 +184,10 @@ namespace
 }
 
 CloudGaikai::CloudGaikai(ChiakiLog *log, std::string duid, std::string service_type, std::string platform,
-	std::string npsso, std::string entitlement_id, int resolution_height)
+	std::string npsso, std::string entitlement_id, int resolution_height, int bitrate_kbps)
 	: log(log), duid(duid), service_type(service_type), platform(platform),
-	  npsso(npsso), entitlement_id(entitlement_id), resolution_height(resolution_height)
+	  npsso(npsso), entitlement_id(entitlement_id), resolution_height(resolution_height),
+	  bitrate_kbps(bitrate_kbps)
 {
 	if(platform == "ps3")
 		virt_type = "konan";
@@ -226,9 +227,8 @@ void CloudGaikai::BuildRequestGameSpec()
 	json_object_object_add(spec, "cloudEndpoint", json_object_new_string("https://cc.prod.gaikai.com"));
 	json_object_object_add(spec, "redirectUri", json_object_new_string(redirect_uri.c_str()));
 
-	// The Switch frontend currently fixes cloud streaming at 1080p. Keep the
-	// fallback here for legacy callers without allowing a request/decoder
-	// resolution mismatch.
+	// CloudPad Switch uses a fixed platform profile: PS5 at 1080p and the
+	// H.264 PS3/PS4 catalogs at 720p. Keep a safe 1080p fallback for callers.
 	std::string resolution_setting;
 	int client_width, client_height;
 	switch(resolution_height)
@@ -241,6 +241,11 @@ void CloudGaikai::BuildRequestGameSpec()
 	json_object_object_add(spec, "clientHeight", json_object_new_int(client_height));
 	json_object_object_add(spec, "adaptiveStreamMode", json_object_new_string("resize"));
 	json_object_object_add(spec, "useClientBwLadder", json_object_new_boolean(1));
+	json_object_object_add(spec, "bwKbpsSent", json_object_new_int(bitrate_kbps));
+	json_object_object_add(spec, "maxBitrateKbps", json_object_new_int(bitrate_kbps));
+	json_object_object_add(spec, "bitrateKbps", json_object_new_int(bitrate_kbps));
+	CHIAKI_LOGI(log, "CloudGaikai: game spec requested bitrate=%d kbps for %s/%s",
+		bitrate_kbps, service_type.c_str(), platform.c_str());
 
 	json_object_object_add(spec, "audioUploadEnabled", json_object_new_boolean(1));
 	json_object_object_add(spec, "audioUploadNumChannels", json_object_new_int(1));
@@ -816,12 +821,12 @@ bool CloudGaikai::Step13_AllocateSlot(Result *out_result, std::function<void(con
 		};
 
 		json_object *network = json_object_new_object();
-		json_object_object_add(network, "bwKbpsSent", json_object_new_int(50000));
+		json_object_object_add(network, "bwKbpsSent", json_object_new_int(bitrate_kbps));
 		json_object_object_add(network, "bwLoss", json_object_new_double(0.001));
 		json_object_object_add(network, "mtu", json_object_new_int(selected_mtu_in));
 		json_object_object_add(network, "rtt", json_object_new_int(selected_rtt_ms));
 		json_object_object_add(network, "port", json_object_new_int(selected_port));
-		json_object_object_add(network, "bwKbpsReceived", json_object_new_int(200000));
+		json_object_object_add(network, "bwKbpsReceived", json_object_new_int(bitrate_kbps));
 		json_object_object_add(network, "bwLossUpstream", json_object_new_int(0));
 		json_object_object_add(network, "mtuUpstream", json_object_new_int(selected_mtu_out));
 
@@ -833,6 +838,8 @@ bool CloudGaikai::Step13_AllocateSlot(Result *out_result, std::function<void(con
 		json_object_object_add(body, "streamTestTime", json_object_new_double(11262.8423));
 		std::string body_str = json_object_to_json_string(body);
 		json_object_put(body);
+		CHIAKI_LOGI(log, "CloudGaikai: allocation bandwidth cap=%d kbps for %s/%s",
+			bitrate_kbps, service_type.c_str(), platform.c_str());
 
 		HttpResponse resp;
 		if(!HttpRequest(url, "POST", headers, body_str, &resp, out_error))

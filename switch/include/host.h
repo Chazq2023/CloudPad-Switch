@@ -80,6 +80,7 @@ class Host
 		// particular must stay alive for the whole session (chiaki_session_init
 		// stores the pointer as-is, it does not copy it).
 		bool cloud_mode = false;
+		std::string cloud_platform;
 		ChiakiServiceType cloud_service_type = CHIAKI_SERVICE_TYPE_REMOTE_PLAY;
 		std::string cloud_server_addr;
 		int cloud_server_port = 0;
@@ -119,6 +120,7 @@ class Host
 		void SetEventQuitCallback(std::function<void(ChiakiQuitEvent *)> chiaki_event_quit_cb);
 		void SetReadControllerCallback(std::function<void(ChiakiControllerState *, std::map<uint32_t, int8_t> *)> io_read_controller_cb);
 		bool IsPS5();
+		bool IsPS3();
 		void PushHapticsFrame(uint8_t *buf, size_t buf_size);
 };
 

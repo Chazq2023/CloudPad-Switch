@@ -96,9 +96,13 @@ namespace
 			return;
 		}
 
-		int resolution_height = settings->ResolutionPresetToInt(settings->GetVideoResolution(nullptr));
+		// PSNOW's PS3/PS4 H.264 path is fixed at 720p. This reduces packet and
+		// render pressure while keeping allocation and decoder profiles aligned.
+		const int resolution_height = 720;
+		const int configured_bitrate_kbps = settings->GetCustomBitrateKbps();
+		const int bitrate_kbps = configured_bitrate_kbps > 0 ? configured_bitrate_kbps : 10000;
 		CloudGaikai gaikai(log, duid, "psnow", kamaji_result.platform, npsso,
-			kamaji_result.entitlement_id, resolution_height);
+			kamaji_result.entitlement_id, resolution_height, bitrate_kbps);
 		CloudGaikai::Result gaikai_result = gaikai.Run([](const std::string &message) {
 			brls::Application::notify(message);
 		});
@@ -116,7 +120,7 @@ namespace
 		Host *host = new Host("Cloud: " + game.name);
 		// Copy the global settings explicitly so cloud hosts remain aligned
 		// with the requested server profile if the Host defaults ever change.
-		settings->SetVideoResolution(host, settings->GetVideoResolution(nullptr));
+		settings->SetVideoResolution(host, CHIAKI_VIDEO_RESOLUTION_PRESET_720p);
 		settings->SetVideoFPS(host, settings->GetVideoFPS(nullptr));
 		host->SetCloudConnectInfo(CHIAKI_SERVICE_TYPE_PSNOW, kamaji_result.platform,
 			gaikai_result.server_ip, gaikai_result.server_port, gaikai_result.launch_spec,
@@ -144,8 +148,11 @@ namespace
 		brls::Application::blockInputs();
 		brls::Application::notify("Starting PS5 cloud stream...");
 
-		int resolution_height = settings->ResolutionPresetToInt(settings->GetVideoResolution(nullptr));
-		CloudGaikai gaikai(log, duid, "pscloud", "ps5", npsso, game.entitlement_id, resolution_height);
+		const int resolution_height = 1080;
+		const int configured_bitrate_kbps = settings->GetCustomBitrateKbps();
+		const int bitrate_kbps = configured_bitrate_kbps > 0 ? configured_bitrate_kbps : 15000;
+		CloudGaikai gaikai(log, duid, "pscloud", "ps5", npsso, game.entitlement_id,
+			resolution_height, bitrate_kbps);
 		CloudGaikai::Result gaikai_result = gaikai.Run([](const std::string &message) {
 			brls::Application::notify(message);
 		});
@@ -159,7 +166,7 @@ namespace
 
 		Host *host = new Host("Cloud: " + game.name);
 		// Keep the client decoder and requested cloud profile in sync.
-		settings->SetVideoResolution(host, settings->GetVideoResolution(nullptr));
+		settings->SetVideoResolution(host, CHIAKI_VIDEO_RESOLUTION_PRESET_1080p);
 		settings->SetVideoFPS(host, settings->GetVideoFPS(nullptr));
 		host->SetCloudConnectInfo(CHIAKI_SERVICE_TYPE_PSCLOUD, "ps5",
 			gaikai_result.server_ip, gaikai_result.server_port, gaikai_result.launch_spec,

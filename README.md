@@ -1,40 +1,66 @@
-# CloudPad-Switch
+# CloudPad for Nintendo Switch
 
-A Nintendo Switch homebrew port of [CloudPad](https://github.com/Chazq2023/CloudPad-Android), a PS4/PS5 Remote
-Play client descended from [Chiaki](https://git.sr.ht/~thestr4ng3r/chiaki) / [chiaki-ng](https://github.com/streetpea/chiaki-ng).
-It streams from your PlayStation console to your Switch over LAN (or the internet, with Remote Play over
-Internet enabled on the console) using [Borealis](https://github.com/xfangfang/borealis) for the on-console UI.
+CloudPad is a Nintendo Switch homebrew application for PlayStation cloud gaming. It lets you browse and stream supported games from your PS3, PS4, and PS5 cloud libraries at 60 FPS.
 
-This repo vendors the parts of CloudPad-Android needed for the Switch build — `switch/` (the Borealis app),
-`lib/` (the portable Chiaki protocol/streaming core), and the `third-party/` pieces the core library depends
-on (nanopb, jerasure, gf-complete) — so it can be built standalone without the Android/Qt/iOS/macOS/Steam Deck
-parts of the upstream tree.
+Resolution is fixed per cloud library: PS5 streams at 1080p, while PS4 and PS3 stream at 720p.
 
-## Building
+CloudPad is an unofficial community project and is not affiliated with or endorsed by Sony Interactive Entertainment.
 
-The build runs inside a pinned devkitPro container (`docker.io/xlanor/chiaki-ng-switch-builder:latest`), the
-same one chiaki-ng's own Switch port uses, so no local devkitPro install is required — just Docker.
+## Performance requirement
 
+A Nintendo Switch CPU overclock to **1785 MHz** is currently required for a smooth streaming experience. Performance at lower CPU clock speeds is still being improved.
+
+## Default controller mappings
+
+CloudPad for Switch follows the default controller mappings used by [CloudPad for Android](https://github.com/Chazq2023/CloudPad-Android):
+
+| Nintendo Switch input | PlayStation input |
+| --- | --- |
+| A | Circle |
+| B | Cross |
+| X | Triangle |
+| Y | Square |
+| L | L1 |
+| R | R1 |
+| ZL | L2 |
+| ZR | R2 |
+| Left Stick button | L3 |
+| Right Stick button | R3 |
+| Plus | Options / Start |
+| Minus (PS3) | Select |
+| Tap Minus (PS4/PS5) | Touchpad click |
+| Hold Minus (PS4/PS5) | Touchpad click and hold |
+| Minus + L (PS4/PS5) | Touchpad left click |
+| Minus + R (PS4/PS5) | Touchpad right click |
+| Minus + X (PS4/PS5) | Touchpad swipe up |
+| Minus + Y (PS4/PS5) | Touchpad swipe left |
+| Minus + A (PS4/PS5) | Touchpad swipe right |
+| Minus + B (PS4/PS5) | Touchpad swipe down |
+| Minus + Plus | PS Home |
+| D-Pad | D-Pad |
+| Left Stick | Left Stick |
+| Right Stick | Right Stick |
+| Switch touchscreen | PlayStation touchpad |
+| ZL + ZR + Plus | Close the stream and return to CloudPad |
+
+The Switch touchscreen maps its position to the PlayStation touchpad and supports touchpad clicks and gestures.
+
+## Install
+
+Download `cloudpad.nro` from the latest release and place it in:
+
+```text
+/switch/cloudpad/cloudpad.nro
 ```
-bash scripts/switch/run-docker-build-chiaki.sh
+
+Launch CloudPad from the Homebrew Menu.
+
+## Build
+
+Docker is required. Run:
+
+```sh
+./scripts/switch/run-docker-build-chiaki.sh
 ```
 
-This produces `build_switch/switch/cloudpad.nro`.
-
-## Installing / testing on a real Switch
-
-1. On the Switch, open the Homebrew Menu and press **Y** to start Homebrew Netloader.
-2. From this repo, push the build over the network:
-   ```
-   bash scripts/switch/push-docker-build-chiaki.sh -a <switch-ip>
-   ```
-3. Launch the app from the Homebrew Menu once it's received.
-
-On first run it needs to be paired with your PS4/PS5 (via the console's Remote Play registration flow) before
-it can stream — see `switch/README.md` for the `chiaki.conf` fields (console name, IP, PSN online ID / account
-ID) if you need to set them up manually.
-
-## Status
-
-Work in progress. The Switch/Borealis frontend and core library build cleanly, but this hasn't yet been
-verified streaming against a real PS4/PS5 on real hardware.
+The finished application is written to `build_switch/switch/cloudpad.nro`.

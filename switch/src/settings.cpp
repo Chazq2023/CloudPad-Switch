@@ -463,14 +463,14 @@ ChiakiVideoResolutionPreset Settings::GetVideoResolution(Host *host)
 
 void Settings::SetVideoResolution(Host *host, ChiakiVideoResolutionPreset value)
 {
-	// CloudPad Switch now exposes a single supported resolution. Clamp old
-	// chiaki.conf values (including saved 720p selections) to 1080p as they
-	// are loaded so removing the selector also changes existing installs.
-	(void)value;
+	// The global/default profile remains 1080p. Cloud sessions set an explicit
+	// host profile: PS5 uses 1080p while PS3/PS4 use 720p.
 	if(host == nullptr)
 		this->global_video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 	else
-		host->video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
+		host->video_resolution = value == CHIAKI_VIDEO_RESOLUTION_PRESET_720p
+			? CHIAKI_VIDEO_RESOLUTION_PRESET_720p
+			: CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 }
 
 void Settings::SetVideoResolution(Host *host, std::string value)
@@ -489,10 +489,13 @@ ChiakiVideoFPSPreset Settings::GetVideoFPS(Host *host)
 
 void Settings::SetVideoFPS(Host *host, ChiakiVideoFPSPreset value)
 {
+	// CloudPad Switch now exposes a single supported frame rate. Upgrade old
+	// saved 30 FPS values to 60 FPS while loading existing configurations.
+	(void)value;
 	if(host == nullptr)
-		this->global_video_fps = value;
+		this->global_video_fps = CHIAKI_VIDEO_FPS_PRESET_60;
 	else
-		host->video_fps = value;
+		host->video_fps = CHIAKI_VIDEO_FPS_PRESET_60;
 }
 HapticPreset Settings::GetHaptic(Host *host)
 {

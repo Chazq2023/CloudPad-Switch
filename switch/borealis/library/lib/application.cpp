@@ -531,11 +531,24 @@ bool Application::handleAction(char button)
     if (Application::viewStack.empty())
         return false;
 
+    View* topView    = Application::viewStack.back();
     View* hintParent = Application::currentFocus;
     std::set<Key> consumedKeys;
 
     if (!hintParent)
-        hintParent = Application::viewStack[Application::viewStack.size() - 1];
+        hintParent = topView;
+
+    // Focus may remain on the view underneath a fullscreen overlay. Give the
+    // visible top view first refusal so its actions can override global actions
+    // registered by the hidden view (notably PLUS/Start quitting the app).
+    for (auto& action : topView->getActions())
+    {
+        if (action.key != static_cast<Key>(button) || !action.available)
+            continue;
+
+        if (action.actionListener())
+            consumedKeys.insert(action.key);
+    }
 
     while (hintParent)
     {
