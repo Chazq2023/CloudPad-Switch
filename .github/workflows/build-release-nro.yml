@@ -3,7 +3,7 @@ name: Build CloudPad NRO Release
 on:
   push:
     branches:
-      - switch-build
+      - main
   workflow_dispatch:
 
 permissions:
