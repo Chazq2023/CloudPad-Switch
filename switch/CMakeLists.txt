@@ -63,6 +63,27 @@ endfunction()
 # draw fill geometry (text glyphs) rather than just construct views.
 gen_dksh("${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 
+# This app's own video (NV12 decode + sharpen) shaders - switch/src/
+# video_renderer.cpp loads these at "romfs:/shaders/video_nv12_{vsh,fsh}.dksh".
+# Compiled here rather than through libuam at runtime (see the UAM_LIB note
+# below - only the CLI tool is available in this Docker image, not the
+# library), so this app only gets the one precompiled NV12 decode+sharpen
+# variant rather than akira's full runtime-selectable FSR EASU/RCAS variant
+# set - see switch/shaders/video_nv12.frag's own header comment for why true
+# multi-pass FSR is deferred rather than attempted blind here.
+function(gen_video_dksh romfs_dir)
+	find_program(NX_UAM_EXE NAMES uam HINTS "${DEVKITPRO}/tools/bin")
+	if(NOT NX_UAM_EXE)
+		message(FATAL_ERROR "Could not find uam: try installing uam")
+	endif()
+	set(VIDEO_SHADER_BASE "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+	file(MAKE_DIRECTORY "${romfs_dir}")
+	execute_process(COMMAND ${NX_UAM_EXE} -s vert -o "${romfs_dir}/video_nv12_vsh.dksh" "${VIDEO_SHADER_BASE}/video_nv12.vert" TIMEOUT 5)
+	execute_process(COMMAND ${NX_UAM_EXE} -s frag -o "${romfs_dir}/video_nv12_fsh.dksh" "${VIDEO_SHADER_BASE}/video_nv12.frag" TIMEOUT 5)
+endfunction()
+
+gen_video_dksh("${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
+
 # uam must be linked BEFORE EGL because both bundle mesa GLSL symbols; link
 # order determines which symbols win with -z,muldefs (see akira's
 # cmake/deko3d_shaders.cmake, same author/toolchain as this fork).
@@ -101,6 +122,7 @@ add_executable(chiaki-borealis WIN32
 	src/cloudkamaji.cpp
 	src/cloudgaikai.cpp
 	src/io.cpp
+	src/video_renderer.cpp
 	src/host.cpp
 	src/main.cpp
 	src/gui.cpp
@@ -111,14 +133,7 @@ set_target_properties(chiaki-borealis PROPERTIES
 	OUTPUT_NAME chiaki)
 
 target_include_directories(chiaki-borealis PRIVATE
-	${CMAKE_CURRENT_SOURCE_DIR}/include
-	# TODO(deko3d-fsr-port): switch/include/io.h still does the OpenGL/glad
-	# rendering from before this port (video renderer + FSR is the next
-	# stage, deliberately kept separate from this UI-API migration) - the
-	# new deko3d-driver Borealis no longer exposes glad.h as part of its own
-	# public include dirs since it has no OpenGL driver on Switch anymore.
-	# Remove this once io.cpp's render path is replaced with deko3d.
-	${CMAKE_CURRENT_SOURCE_DIR}/borealis/library/include/borealis/extern/glad)
+	${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(chiaki-borealis
 	chiaki-lib

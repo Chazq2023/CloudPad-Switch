@@ -15,99 +15,10 @@
 #define SWITCH_TOUCHSCREEN_MAX_X 1280
 #define SWITCH_TOUCHSCREEN_MAX_Y 720
 
-// source:
-// gui/src/avopenglwidget.cpp
-//
-// examples :
-// https://www.roxlu.com/2014/039/decoding-h264-and-yuv420p-playback
-// https://gist.github.com/roxlu/9329339
-
-// use OpenGl to decode YUV
-// the aim is to spare CPU load on nintendo switch
-
-static const char *shader_vert_glsl = R"glsl(
-#version 150 core
-in vec2 pos_attr;
-out vec2 uv_var;
-void main()
-{
-	uv_var = pos_attr;
-	gl_Position = vec4(pos_attr * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);
-}
-)glsl";
-
-// Both fragment shaders take an unsharp-mask term on the luma (Y) plane only,
-// before YUV->RGB conversion - sharpening luma alone avoids the color
-// fringing a naive RGB-space unsharp mask would introduce. u_sharpen is 0 by
-// default (identical output to before sharpening existed); IO::SetSharpenLevel
-// maps Settings::GetSharpenLevel() (0..3) to a strength here.
-static const char *yuv420p_shader_frag_glsl = R"glsl(
-#version 150 core
-uniform sampler2D plane1; // Y
-uniform sampler2D plane2; // U
-uniform sampler2D plane3; // V
-uniform vec2 u_texel_size; // 1/width, 1/height of plane1
-uniform float u_sharpen;   // 0 = off
-in vec2 uv_var;
-out vec4 out_color;
-void main()
-{
-	float y_c = texture(plane1, uv_var).r;
-	if(u_sharpen > 0.0)
-	{
-		float y_u = texture(plane1, uv_var - vec2(0.0, u_texel_size.y)).r;
-		float y_d = texture(plane1, uv_var + vec2(0.0, u_texel_size.y)).r;
-		float y_l = texture(plane1, uv_var - vec2(u_texel_size.x, 0.0)).r;
-		float y_r = texture(plane1, uv_var + vec2(u_texel_size.x, 0.0)).r;
-		y_c = y_c + u_sharpen * (4.0 * y_c - y_u - y_d - y_l - y_r);
-	}
-	vec3 yuv = vec3(
-		(y_c - (16.0 / 255.0)) / ((235.0 - 16.0) / 255.0),
-		(texture(plane2, uv_var).r - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5,
-		(texture(plane3, uv_var).r - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5);
-	vec3 rgb = mat3(
-		1.0,		1.0,		1.0,
- 		0.0,		-0.18733,	1.85563,
- 		1.57480,	-0.46812, 	0.0) * yuv;
-	out_color = vec4(rgb, 1.0);
-}
-)glsl";
-
-static const char *nv12_shader_frag_glsl = R"glsl(
-#version 150 core
-
-uniform sampler2D plane1; // Y
-uniform sampler2D plane2; // interlaced UV
-uniform vec2 u_texel_size; // 1/width, 1/height of plane1
-uniform float u_sharpen;   // 0 = off
-
-in vec2 uv_var;
-
-out vec4 out_color;
-
-void main()
-{
-	float y_c = texture(plane1, uv_var).r;
-	if(u_sharpen > 0.0)
-	{
-		float y_u = texture(plane1, uv_var - vec2(0.0, u_texel_size.y)).r;
-		float y_d = texture(plane1, uv_var + vec2(0.0, u_texel_size.y)).r;
-		float y_l = texture(plane1, uv_var - vec2(u_texel_size.x, 0.0)).r;
-		float y_r = texture(plane1, uv_var + vec2(u_texel_size.x, 0.0)).r;
-		y_c = y_c + u_sharpen * (4.0 * y_c - y_u - y_d - y_l - y_r);
-	}
-	vec3 yuv = vec3(
-		(y_c - (16.0 / 255.0)) / ((235.0 - 16.0) / 255.0),
-		(texture(plane2, uv_var).r - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5,
-		(texture(plane2, uv_var).g - (16.0 / 255.0)) / ((240.0 - 16.0) / 255.0) - 0.5
-	);
-	vec3 rgb = mat3(
-		1.0,		1.0,		1.0,
- 		0.0,		-0.18733,	1.85563,
- 		1.57480,	-0.46812, 	0.0) * yuv;
-	out_color = vec4(rgb, 1.0);
-}
-)glsl";
+// Video rendering (NV12 decode + sharpen, deko3d) lives in
+// switch/src/video_renderer.cpp / switch/shaders/video_nv12.{vert,frag} -
+// this file owns decode (FFmpeg/NVTEGRA) and the decode thread/frame ring
+// only; VideoRenderer::Draw()/UpdateFrame() do the actual GPU work.
 
 std::atomic<int> current_frame{0};
 int next_frame = 0;
@@ -115,12 +26,6 @@ int next_frame = 0;
 bool haptic_lock = false;
 int haptic_val = 0;
 std::chrono::system_clock::time_point haptic_lock_time;
-
-static const float vert_pos[] = {
-	0.0f, 0.0f,
-	0.0f, 1.0f,
-	1.0f, 0.0f,
-	1.0f, 1.0f};
 
 IO *IO::instance = nullptr;
 bool enableHWAccl = true;
@@ -149,91 +54,6 @@ IO::~IO()
 	}
 	FreeVideo();
 }
-
-void IO::SetMesaConfig()
-{
-	//TRACE("%s", "Mesaconfig");
-	//setenv("MESA_GL_VERSION_OVERRIDE", "3.3", 1);
-	//setenv("MESA_GLSL_VERSION_OVERRIDE", "330", 1);
-	// Uncomment below to disable error checking and save CPU time (useful for production):
-	//setenv("MESA_NO_ERROR", "1", 1);
-#ifdef DEBUG_OPENGL
-	// Uncomment below to enable Mesa logging:
-	setenv("EGL_LOG_LEVEL", "debug", 1);
-	setenv("MESA_VERBOSE", "all", 1);
-	setenv("NOUVEAU_MESA_DEBUG", "1", 1);
-
-	// Uncomment below to enable shader debugging in Nouveau:
-	//setenv("NV50_PROG_OPTIMIZE", "0", 1);
-	setenv("NV50_PROG_DEBUG", "1", 1);
-	//setenv("NV50_PROG_CHIPSET", "0x120", 1);
-#endif
-}
-
-#ifdef DEBUG_OPENGL
-#define D(x)                                        \
-	{                                               \
-		(x);                                        \
-		CheckGLError(__func__, __FILE__, __LINE__); \
-	}
-void IO::CheckGLError(const char *func, const char *file, int line)
-{
-	GLenum err;
-	while((err = glGetError()) != GL_NO_ERROR)
-	{
-		CHIAKI_LOGE(this->log, "glGetError: %x function: %s from %s line %d", err, func, file, line);
-		//GL_INVALID_VALUE, 0x0501
-		// Given when a value parameter is not a legal value for that function. T
-		// his is only given for local problems;
-		// if the spec allows the value in certain circumstances,
-		// where other parameters or state dictate those circumstances,
-		// then GL_INVALID_OPERATION is the result instead.
-	}
-}
-
-#define DS(x)                                             \
-	{                                                     \
-		DumpShaderError(x, __func__, __FILE__, __LINE__); \
-	}
-void IO::DumpShaderError(GLuint shader, const char *func, const char *file, int line)
-{
-	GLchar str[512 + 1];
-	GLsizei len = 0;
-	glGetShaderInfoLog(shader, 512, &len, str);
-	if(len > 512)
-		len = 512;
-	str[len] = '\0';
-	CHIAKI_LOGE(this->log, "glGetShaderInfoLog: %s function: %s from %s line %d", str, func, file, line);
-}
-
-#define DP(x)                                              \
-	{                                                      \
-		DumpProgramError(x, __func__, __FILE__, __LINE__); \
-	}
-void IO::DumpProgramError(GLuint prog, const char *func, const char *file, int line)
-{
-	GLchar str[512 + 1];
-	GLsizei len = 0;
-	glGetProgramInfoLog(prog, 512, &len, str);
-	if(len > 512)
-		len = 512;
-	str[len] = '\0';
-	CHIAKI_LOGE(this->log, "glGetProgramInfoLog: %s function: %s from %s line %d", str, func, file, line);
-}
-
-#else
-// do nothing
-#define D(x) \
-	{        \
-		(x); \
-	}
-#define DS(x) \
-	{         \
-	}
-#define DP(x) \
-	{         \
-	}
-#endif
 
 bool IO::VideoCB(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered, void *user)
 {
@@ -593,9 +413,9 @@ bool IO::InitVideo(int video_width, int video_height, int screen_width, int scre
 	}
   this->tmp_frame = av_frame_alloc();
 
-	if(!InitOpenGl())
+	if(!this->video_renderer.Init(this->log, video_width, video_height))
 	{
-		throw Exception("Failed to initiate OpenGl");
+		throw Exception("Failed to initiate VideoRenderer");
 	}
 
 	this->video_decode_thread_running = true;
@@ -656,7 +476,7 @@ bool IO::FreeVideo()
 		avcodec_free_context(&this->codec_context);
 	}
 
-	this->isFirst = true;
+	this->video_renderer.Cleanup();
 	current_frame.store(0);
 	next_frame = 0;
 	this->decoded_frame_generation.store(0);
@@ -1161,278 +981,14 @@ bool IO::InitAVCodec(bool is_PS5)
 	return true;
 }
 
-bool IO::InitOpenGl()
+void IO::RenderFrame()
 {
-	CHIAKI_LOGI(this->log, "loading OpenGL");
-	isFirst = true;
-
-	if(!InitOpenGlShader())
-		return false;
-	
-	if (enableHWAccl) {
-		if(!InitOpenGlTX1Textures()) {
-			return false;
-		}
-	} else {
-		if(!InitOpenGlTextures()) {
-			return false;
-		}
-	}
-
-
-	return true;
-}
-
-bool IO::InitOpenGlTextures()
-{
-	CHIAKI_LOGV(this->log, "loading OpenGL textrures");
-
-	D(glGenTextures(PLANES_COUNT, this->tex));
-	D(glGenBuffers(PLANES_COUNT, this->pbo));
-	uint8_t uv_default[] = {0x7f, 0x7f};
-	for(int i = 0; i < PLANES_COUNT; i++)
-	{
-		D(glBindTexture(GL_TEXTURE_2D, this->tex[i]));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
-		D(glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE, i > 0 ? uv_default : nullptr));
-	}
-
-	D(glUseProgram(this->prog));
-	// bind only as many planes as we need
-	const char *plane_names[] = {"plane1", "plane2", "plane3"};
-	for(int i = 0; i < PLANES_COUNT; i++)
-		D(glUniform1i(glGetUniformLocation(this->prog, plane_names[i]), i));
-
-	D(glGenVertexArrays(1, &this->vao));
-	D(glBindVertexArray(this->vao));
-
-	D(glGenBuffers(1, &this->vbo));
-	D(glBindBuffer(GL_ARRAY_BUFFER, this->vbo));
-	D(glBufferData(GL_ARRAY_BUFFER, sizeof(vert_pos), vert_pos, GL_STATIC_DRAW));
-
-	D(glBindBuffer(GL_ARRAY_BUFFER, this->vbo));
-	D(glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr));
-	D(glEnableVertexAttribArray(0));
-
-	D(glCullFace(GL_BACK));
-	D(glEnable(GL_CULL_FACE));
-	D(glClearColor(0.5, 0.5, 0.5, 1.0));
-	return true;
-}
-
-bool IO::InitOpenGlTX1Textures()
-{
-	CHIAKI_LOGV(this->log, "loading OpenGL TX1 textrures");
-
-	int planes[][5] = {
-		// { width_divide, height_divider, data_per_pixel }
-			{ 1, 1, 1, GL_R8, GL_RED },
-			{ 2, 2, 2, GL_RG8, GL_RG }
-	};
-
-	D(glGenTextures(2, this->tex));
-	D(glGenBuffers(2, this->pbo));
-	uint8_t uv_default[] = {0x7f, 0x7f};
-	for(int i = 0; i < MAX_NV12_PLANE_COUNT; i++)
-	{
-		D(glBindTexture(GL_TEXTURE_2D, this->tex[i]));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
-		D(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
-		D(glTexImage2D(GL_TEXTURE_2D, 0, planes[i][3], 1, 1, 0, planes[i][4], GL_UNSIGNED_BYTE, i > 0 ? uv_default : nullptr));
-	}
-
-	D(glUseProgram(this->prog));
-	// bind only as many planes as we need
-	const char *plane_names[] = {"plane1", "plane2", "plane3"};
-	for(int i = 0; i < MAX_NV12_PLANE_COUNT; i++) {
-		m_texture_uniform[i] = glGetUniformLocation(this->prog, plane_names[i]);
-		D(glUniform1i(m_texture_uniform[i], i));
-	}
-
-	D(glGenVertexArrays(1, &this->vao));
-	D(glBindVertexArray(this->vao));
-
-	D(glGenBuffers(1, &this->vbo));
-	D(glBindBuffer(GL_ARRAY_BUFFER, this->vbo));
-	D(glBufferData(GL_ARRAY_BUFFER, sizeof(vert_pos), vert_pos, GL_STATIC_DRAW));
-
-	D(glBindBuffer(GL_ARRAY_BUFFER, this->vbo));
-	D(glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr));
-	D(glEnableVertexAttribArray(0));
-
-	D(glCullFace(GL_BACK));
-	D(glEnable(GL_CULL_FACE));
-	return true;
-}
-
-GLuint IO::CreateAndCompileShader(GLenum type, const char *source)
-{
-	GLint success;
-	GLchar msg[512];
-
-	GLuint handle;
-	D(handle = glCreateShader(type));
-	if(!handle)
-	{
-		CHIAKI_LOGE(this->log, "%u: cannot create shader", type);
-		DP(this->prog);
-	}
-
-	D(glShaderSource(handle, 1, &source, nullptr));
-	D(glCompileShader(handle));
-	D(glGetShaderiv(handle, GL_COMPILE_STATUS, &success));
-
-	if(!success)
-	{
-		D(glGetShaderInfoLog(handle, sizeof(msg), nullptr, msg));
-		CHIAKI_LOGE(this->log, "%u: %s\n", type, msg);
-		D(glDeleteShader(handle));
-	}
-
-	return handle;
-}
-
-bool IO::InitOpenGlShader()
-{
-	CHIAKI_LOGV(this->log, "loading OpenGl Shaders");
-
-	D(this->vert = CreateAndCompileShader(GL_VERTEX_SHADER, shader_vert_glsl));
-	if (enableHWAccl) {
-		D(this->frag = CreateAndCompileShader(GL_FRAGMENT_SHADER, nv12_shader_frag_glsl));
-	} else {
-		D(this->frag = CreateAndCompileShader(GL_FRAGMENT_SHADER, yuv420p_shader_frag_glsl));
-	}
-
-	D(this->prog = glCreateProgram());
-
-	D(glAttachShader(this->prog, this->vert));
-	D(glAttachShader(this->prog, this->frag));
-	D(glBindAttribLocation(this->prog, 0, "pos_attr"));
-	D(glLinkProgram(this->prog));
-
-	GLint success;
-	D(glGetProgramiv(this->prog, GL_LINK_STATUS, &success));
-	if(!success)
-	{
-		char buf[512];
-		glGetProgramInfoLog(this->prog, sizeof(buf), nullptr, buf);
-		CHIAKI_LOGE(this->log, "OpenGL link error: %s", buf);
-		return false;
-	}
-
-	D(glDeleteShader(this->vert));
-	D(glDeleteShader(this->frag));
-
-	D(this->sharpen_uniform = glGetUniformLocation(this->prog, "u_sharpen"));
-	D(this->texel_size_uniform = glGetUniformLocation(this->prog, "u_texel_size"));
-
-	return true;
-}
-
-inline void IO::SetOpenGlYUVPixels(AVFrame *frame)
-{
-	D(glUseProgram(this->prog));
-	if(this->texel_size_uniform >= 0)
-		D(glUniform2f(this->texel_size_uniform, 1.0f / frame->width, 1.0f / frame->height));
-	if(this->sharpen_uniform >= 0)
-		D(glUniform1f(this->sharpen_uniform, this->sharpen_amount));
-
-	int planes[][3] = {
-		// { width_divide, height_divider, data_per_pixel }
-		{1, 1, 1}, // Y
-		{2, 2, 1}, // U
-		{2, 2, 1}  // V
-	};
-
-	for(int i = 0; i < PLANES_COUNT; i++)
-	{
-		int width = frame->width / planes[i][0];
-		int height = frame->height / planes[i][1];
-		int size = width * height * planes[i][2];
-		uint8_t *buf;
-
-		D(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, this->pbo[i]));
-		D(glBufferData(GL_PIXEL_UNPACK_BUFFER, size, nullptr, GL_STREAM_DRAW));
-		D(buf = reinterpret_cast<uint8_t *>(glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, size, GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)));
-		if(!buf)
-		{
-			GLint data;
-			D(glGetBufferParameteriv(GL_PIXEL_UNPACK_BUFFER, GL_BUFFER_SIZE, &data));
-			CHIAKI_LOGE(this->log, "AVOpenGLFrame failed to map PBO");
-			CHIAKI_LOGE(this->log, "Info buf == %p. size %d frame %d * %d, divs %d, %d, pbo %d GL_BUFFER_SIZE %x",
-				buf, size, frame->width, frame->height, planes[i][0], planes[i][1], pbo[i], data);
-			continue;
-		}
-
-		if(frame->linesize[i] == width)
-		{
-			// Y
-			memcpy(buf, frame->data[i], size);
-		}
-		else
-		{
-			// UV
-			for(int l = 0; l < height; l++)
-				memcpy(buf + width * l * planes[i][2],
-					frame->data[i] + frame->linesize[i] * l,
-					width * planes[i][2]);
-		}
-		D(glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER));
-		D(glBindTexture(GL_TEXTURE_2D, tex[i]));
-		D(glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr));
-		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-	}
-	glFinish();
-}
-inline void IO::SetOpenGlNV12Pixels(AVFrame *frame)
-{
-	D(glUseProgram(this->prog));
-	if(this->texel_size_uniform >= 0)
-		D(glUniform2f(this->texel_size_uniform, 1.0f / frame->width, 1.0f / frame->height));
-	if(this->sharpen_uniform >= 0)
-		D(glUniform1f(this->sharpen_uniform, this->sharpen_amount));
-
-	int planes[][5] = {
-		// { width_divide, height_divider, data_per_pixel }
-			{ 1, 1, 1, GL_R8, GL_RED },
-			{ 2, 2, 2, GL_RG8, GL_RG }
-	};
-
-	for (int i = 0; i < MAX_NV12_PLANE_COUNT; i++) {
-		glActiveTexture(GL_TEXTURE0 + i);
-		int real_width = frame->linesize[i] / planes[i][0];
-		int width = frame->width / planes[i][0];
-		int height = frame->height / planes[i][1];
-		D(glBindTexture(GL_TEXTURE_2D, tex[i]));
-		glPixelStorei(GL_UNPACK_ROW_LENGTH, real_width);
-		if (isFirst) {
-			CHIAKI_LOGI(this->log, "[NV12 PROBE] plane=%d frame->width=%d frame->height=%d frame->linesize=%d real_width=%d tex_width=%d tex_height=%d video_width=%d video_height=%d screen_width=%d screen_height=%d",
-				i, frame->width, frame->height, frame->linesize[i], real_width, width, height, this->video_width, this->video_height, this->screen_width, this->screen_height);
-			D(glTexImage2D(GL_TEXTURE_2D, 0, planes[i][3], width, height, 0, planes[i][4], GL_UNSIGNED_BYTE, frame->data[i]));
-		} else {
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width,
-											height, planes[i][4], GL_UNSIGNED_BYTE, frame->data[i]);
-		}
-		glUniform1i(m_texture_uniform[i], i);
-		D(glBindTexture(GL_TEXTURE_2D, 0));
-	}
-
-	isFirst = false;
-}
-
-inline void IO::OpenGlDraw()
-{
-	glClear(GL_COLOR_BUFFER_BIT);
-
 	// Upload only when the decode thread has published a new frame. The GPU
 	// texture retains the previous image between arrivals, so drawing it again
 	// is sufficient and avoids repeatedly transferring the same 1080p NV12
 	// planes. Smooth pacing additionally waits for the detected source cadence.
+	// Same gating logic the OpenGL path this replaces used - see io.h's
+	// video_pacing_smooth comment.
 	uint64_t decoded_generation = this->decoded_frame_generation.load(std::memory_order_acquire);
 	bool due = decoded_generation != this->rendered_frame_generation;
 	if(this->video_pacing_smooth)
@@ -1447,29 +1003,11 @@ inline void IO::OpenGlDraw()
 	if(due)
 	{
 		int frame_index = current_frame.load(std::memory_order_acquire);
-		if (enableHWAccl) {
-			SetOpenGlNV12Pixels(this->frames[frame_index]);
-		} else {
-			// send to OpenGl
-			SetOpenGlYUVPixels(this->frames[frame_index]);
-		}
+		this->video_renderer.UpdateFrame(this->frames[frame_index]);
 		this->rendered_frame_generation = decoded_generation;
 	}
 
-	//avcodec_flush_buffers(this->codec_context);
-	D(glBindVertexArray(this->vao));
-
-	for(int i = 0; i < PLANES_COUNT; i++)
-	{
-		D(glActiveTexture(GL_TEXTURE0 + i));
-		D(glBindTexture(GL_TEXTURE_2D, this->tex[i]));
-	}
-
-	D(glDrawArrays(GL_TRIANGLE_STRIP, 0, 4));
-	D(glBindVertexArray(0));
-	// Borealis calls glfwSwapBuffers() immediately after this frame. Forcing a
-	// full finish here made the CPU busy-wait for the GPU before that swap.
-	D(glFlush());
+	this->video_renderer.Draw();
 }
 
 bool IO::InitController()
@@ -1724,11 +1262,7 @@ void IO::UpdateControllerState(ChiakiControllerState *state, std::map<uint32_t, 
 
 bool IO::MainLoop()
 {
-	D(glUseProgram(this->prog));
-
-	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	OpenGlDraw();
+	RenderFrame();
 	chiaki_switch_self_report_ticks(this->cpu_sample_main_idx);
 
 	return !this->quit;
@@ -1736,9 +1270,7 @@ bool IO::MainLoop()
 
 void IO::SetSharpenLevel(int level)
 {
-	// 0.15 per level keeps High (0.45) visibly sharper without haloing badly
-	// on the Switch's own 720p/1080p panel scaling.
-	this->sharpen_amount = 0.15f * (float)level;
+	this->video_renderer.SetSharpenLevel(level);
 }
 
 void IO::SetVideoPacing(bool smooth)

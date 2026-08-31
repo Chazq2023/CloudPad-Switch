@@ -7,26 +7,9 @@
 #include <cstdint>
 #include <functional>
 
-#include <glad.h> // glad library (OpenGL loader)
+#include "video_renderer.h"
 
 #include <chiaki/session.h>
-
-/*
-https://github.com/devkitPro/switch-glad/blob/master/include/glad/glad.h
-https://glad.dav1d.de/#profile=core&language=c&specification=gl&api=gl%3D4.3&extensions=GL_EXT_texture_compression_s3tc&extensions=GL_EXT_texture_filter_anisotropic
-
-Language/Generator: C/C++
-Specification: gl
-APIs: gl=4.3
-Profile: core
-Extensions:
-GL_EXT_texture_compression_s3tc,
-GL_EXT_texture_filter_anisotropic
-Loader: False
-Local files: False
-Omit khrplatform: False
-Reproducible: False
-*/
 
 #ifdef __SWITCH__
 #include <switch.h>
@@ -54,7 +37,6 @@ extern "C"
 
 #include "exception.h"
 
-#define PLANES_COUNT 3
 #define SDL_JOYSTICK_COUNT 2
 
 class IO
@@ -69,8 +51,6 @@ class IO
 		bool quit = false;
 		static const int MAX_FRAME_COUNT = 3;
 		static const int MAX_NV12_PLANE_COUNT = 2;
-		GLint m_texture_uniform[MAX_NV12_PLANE_COUNT];
-		// opengl reader writer
 		std::mutex mtx;
 		// default nintendo switch res
     AVBufferRef *hw_device_ctx = nullptr;
@@ -90,16 +70,7 @@ class IO
 		HidSixAxisSensorHandle sixaxis_handles[4];
 		HidVibrationDeviceHandle vibration_handles[2][2];
 #endif
-		GLuint vao;
-		GLuint vbo;
-		GLuint tex[PLANES_COUNT];
-		GLuint pbo[PLANES_COUNT];
-		GLuint vert;
-		GLuint frag;
-		GLuint prog;
-		GLint sharpen_uniform = -1;
-		GLint texel_size_uniform = -1;
-		float sharpen_amount = 0.0f; // 0=Off, matches shader's u_sharpen
+		VideoRenderer video_renderer;
 
 		// "Standard" vs "Smooth" video pacing (see IO::SetVideoPacing). Standard
 		// re-uploads and presents the newest decoded frame every draw tick
@@ -188,19 +159,7 @@ class IO
 		// work-item boundary.
 		int cpu_sample_main_idx = -1;
 
-		bool InitOpenGl();
-		bool InitOpenGlTextures();
-		bool InitOpenGlTX1Textures();
-		bool InitOpenGlShader();
-		void OpenGlDraw();
-#ifdef DEBUG_OPENGL
-		void CheckGLError(const char *func, const char *file, int line);
-		void DumpShaderError(GLuint prog, const char *func, const char *file, int line);
-		void DumpProgramError(GLuint prog, const char *func, const char *file, int line);
-#endif
-		GLuint CreateAndCompileShader(GLenum type, const char *source);
-		void SetOpenGlYUVPixels(AVFrame *frame);
-		void SetOpenGlNV12Pixels(AVFrame *frame);
+		void RenderFrame();
 		bool ReadGameKeys(SDL_Event *event, ChiakiControllerState *state);
 		bool ReadGameTouchScreen(ChiakiControllerState *state, std::map<uint32_t, int8_t> *finger_id_touch_id);
 		bool ReadGameSixAxis(ChiakiControllerState *state);
@@ -212,14 +171,12 @@ class IO
 		int HapticBase = 400;
 
 		~IO();
-		bool isFirst = true;
 		// Set by UpdateControllerState when ZL+ZR+Plus are all held, so the
 		// active PSRemotePlay view can cleanly tear down the stream and
 		// return to the app's own main menu. Checked and reset by whoever
 		// owns the session (PSRemotePlay::draw), not acted on here since IO
 		// has no view/session handles of its own.
 		std::atomic<bool> exit_stream_requested{false};
-		void SetMesaConfig();
 		bool VideoCB(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered, void *user);
 		void InitAudioCB(unsigned int channels, unsigned int rate);
 		void AudioCB(int16_t *buf, size_t samples_count);
