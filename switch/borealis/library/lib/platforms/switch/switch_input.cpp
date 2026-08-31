@@ -680,10 +680,27 @@ void SwitchInputManager::screenshot_button_thread_fn(std::stop_token token) {
     // This needs a high priority because we are racing am to clear the event
     svcSetThreadPriority(CUR_THREAD_HANDLE, 0x20);
 
+    // If either handle can't be acquired (seen in practice when running via
+    // nxlink/hbloader, which doesn't grant this app the same hidsys/am
+    // capabilities a fully installed title has - both calls fail with the
+    // same 0xE401 result there), do NOT return early. A pthread-backed
+    // std::jthread that exits within milliseconds of starting reliably
+    // crashes on this toolchain: devkitA64/libnx's per-thread C++
+    // exception-handling cleanup (eh_globals_dtor, invoked from
+    // threadExit/_EntryWrap on thread exit) segfaults on a thread that
+    // barely ran - confirmed on-device via an Atmosphere crash report whose
+    // backtrace was exactly _EntryWrap -> __syscall_thread_exit ->
+    // threadExit -> eh_globals_dtor, immediately after this function's
+    // "Failed to acquire" log line. Idling until stop_requested() instead
+    // keeps this thread alive for the app's normal lifetime, so it only
+    // ever exits through the same destructor-driven request_stop()+join()
+    // path the success case already relies on.
     NXEvent screenshot_evt;
     DEFER([&screenshot_evt] { eventClose(&screenshot_evt); });
     if (auto rc = hidsysAcquireCaptureButtonEventHandle(&screenshot_evt, false); R_FAILED(rc)) {
         Logger::error("Failed to acquire the screenshot button event: {}\n", rc);
+        while (!token.stop_requested())
+            svcSleepThread(50'000'000); // 50ms
         return;
     }
 
@@ -691,6 +708,8 @@ void SwitchInputManager::screenshot_button_thread_fn(std::stop_token token) {
     DEFER([&home_evt] { eventClose(&home_evt); });
     if (auto rc = hidsysAcquireHomeButtonEventHandle(&home_evt, false); R_FAILED(rc)) {
         Logger::error("Failed to acquire the home button event: {}\n", rc);
+        while (!token.stop_requested())
+            svcSleepThread(50'000'000); // 50ms
         return;
     }
 

@@ -3,5 +3,7 @@ build_switch/
 *.nro
 *.nacp
 *.elf
+# Regenerated at every cmake configure by gen_dksh() in switch/CMakeLists.txt
+switch/res/shaders/*.dksh
 .idea/
 .DS_Store

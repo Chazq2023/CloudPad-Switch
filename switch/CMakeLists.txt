@@ -51,12 +51,17 @@ function(gen_dksh romfs_dir)
 	execute_process(COMMAND ${NX_UAM_EXE} -s frag -o "${romfs_dir}/fill_fsh.dksh" "${SHADER_BASE}/fill_fsh.glsl" TIMEOUT 5)
 endfunction()
 
-# TODO(deko3d-fsr-port): output currently goes to the build tree only. Once
-# the deko3d video renderer is wired into the app (next stage of this port),
-# this needs to land inside whatever directory add_nro_target's romfs= param
-# packages (currently switch/res) so the compiled .dksh shaders actually ship
-# in the .nro's romfs - res/shaders under source control is the likely home.
-gen_dksh("${CMAKE_CURRENT_BINARY_DIR}/dksh_shaders")
+# Must land inside switch/res (the directory add_nro_target's romfs= param
+# packages) so the compiled .dksh shaders actually ship in the .nro's romfs -
+# dk_renderer.cpp's CShader::load() calls (fill_vsh/fill_aa_fsh/fill_fsh)
+# read "romfs:/shaders/...", which doesn't exist at all if this only writes
+# to the build tree. Missing shaders load as empty/invalid, which the GPU
+# command validator silently rejects at submit time - confirmed on-device as
+# a deko3d Queue::submitCommands "queue in error state" abort (checkError()
+# marks the queue Error after an nvGpuChannelKickoff failure) inside
+# DkRenderer::Flush, first hit on whatever frame is the first to actually
+# draw fill geometry (text glyphs) rather than just construct views.
+gen_dksh("${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 
 # uam must be linked BEFORE EGL because both bundle mesa GLSL symbols; link
 # order determines which symbols win with -z,muldefs (see akira's
@@ -98,7 +103,8 @@ add_executable(chiaki-borealis WIN32
 	src/io.cpp
 	src/host.cpp
 	src/main.cpp
-	src/gui.cpp)
+	src/gui.cpp
+	src/theme.cpp)
 
 set_target_properties(chiaki-borealis PROPERTIES
 	CXX_STANDARD 17
@@ -129,11 +135,20 @@ if(UAM_LIB)
 	target_link_libraries(chiaki-borealis ${UAM_LIB})
 endif()
 
-# uam and EGL both bundle mesa GLSL symbols; -z,muldefs lets the link
-# through and link order above (uam via target_link_libraries before EGL is
-# ever pulled in) determines which symbol definitions win. See gen_dksh's
-# comment above for why this couldn't just reuse akira's own cmake include.
-target_link_options(chiaki-borealis PRIVATE -Wl,-z,muldefs)
+# uam and EGL both bundle mesa GLSL symbols, which needs -z,muldefs to let
+# the link through (link order above - uam via target_link_libraries before
+# EGL is ever pulled in - then determines which symbol definitions win). See
+# gen_dksh's comment above for why this couldn't just reuse akira's own
+# cmake include. Only apply it when libuam is actually linked: muldefs lets
+# ANY duplicate symbol across every linked library silently resolve with no
+# error, not just the specific uam/EGL Mesa overlap it's meant for - with
+# libuam absent there's nothing to override, and leaving it on regardless
+# is suspected of silently corrupting the app's actual libstdc++/libgcc C++
+# exception-unwinding symbols - an on-device crash inside __cxa_throw itself
+# showed up only after this flag started applying unconditionally.
+if(UAM_LIB)
+	target_link_options(chiaki-borealis PRIVATE -Wl,-z,muldefs)
+endif()
 
 if(CHIAKI_IS_SWITCH)
 	# libnx is forced by the switch toolchain. The deko3d driver selected

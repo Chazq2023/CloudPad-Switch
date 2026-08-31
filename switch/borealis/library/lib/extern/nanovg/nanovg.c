@@ -41,7 +41,18 @@
 #	if defined(__PSV__) && defined(USE_GLES2)
 #		define NVG_INIT_FONTIMAGE_SIZE  240
 #	else
-#		define NVG_INIT_FONTIMAGE_SIZE 512
+		// 512 (upstream default) overflows partway through this app's own
+		// first frame of real UI text (sidebar/tab labels) on-device, and
+		// nvgEndFrame's atlas-grow path (nanovg.c's fontImageIdx handling,
+		// which recreates ctx->fontImages[fontImageIdx+1] at double size)
+		// crashes when it runs on this vendored deko3d nanovg backend -
+		// confirmed via an Atmosphere crash report backtrace of
+		// nvgEndFrame -> DkRenderer::Flush -> dk::detail::ImageLayout::
+		// calcLevelOffset -> RaiseError -> abort. Starting large enough to
+		// hold this app's actual glyph set avoids ever exercising that grow
+		// path rather than fixing it, but doing so is far lower risk than
+		// hand-patching third-party deko3d/nanovg internals blind.
+#		define NVG_INIT_FONTIMAGE_SIZE 2048
 #	endif
 #endif
 

@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "gui.h"
+#include "theme.h"
 #include <chiaki/log.h>
 
 // TODO
@@ -33,6 +34,7 @@ bool MainApplication::Load()
 		return false;
 	}
 	brls::Application::createWindow("CloudPad");
+	ApplyCloudPadTheme();
 
 	// init chiaki gl after borealis
 	// let borealis manage the main screen/window

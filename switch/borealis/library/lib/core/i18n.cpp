@@ -136,22 +136,39 @@ namespace internal
             return stringName;
         }
 
-        // First look for translated string in current locale
-        try
+        // First look for translated string in current locale, then the
+        // default locale. Checked with contains()/at() rather than
+        // operator[](pointer) + catch: operator[] on a json_pointer
+        // silently CREATES a null entry for a missing key instead of
+        // raising "key not found", so the not-found case (near-universal
+        // here, since this app doesn't ship every key these upstream
+        // Borealis views look up) went through get<std::string>() on that
+        // null and threw type_error.302 every time - and on-device that
+        // throw crashed inside __cxa_throw itself even though it's inside a
+        // catch(...), so avoiding the throw for this common case matters
+        // more than catching it. at() below still throws for the much
+        // rarer case of a key that exists but isn't a string; that stays
+        // guarded.
+        if (currentLocale.contains(pointer))
         {
-            return currentLocale[pointer].get<std::string>();
-        }
-        catch (...)
-        {
+            try
+            {
+                return currentLocale.at(pointer).get<std::string>();
+            }
+            catch (...)
+            {
+            }
         }
 
-        // Then look for default locale
-        try
+        if (defaultLocale.contains(pointer))
         {
-            return defaultLocale[pointer].get<std::string>();
-        }
-        catch (...)
-        {
+            try
+            {
+                return defaultLocale.at(pointer).get<std::string>();
+            }
+            catch (...)
+            {
+            }
         }
 
         // Fallback to returning the string name

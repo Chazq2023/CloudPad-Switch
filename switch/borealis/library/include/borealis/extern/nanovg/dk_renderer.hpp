@@ -156,7 +156,19 @@ namespace nvg {
                 SamplerType_Total     = 0x10,
             };
         private:
-            static constexpr size_t DynamicCmdSize = 0x20000;
+            // 0x20000 (128KB, upstream default) is enough for a simple
+            // screen but overflows once a real scrollable list (many
+            // DetailCell rows, e.g. a populated game catalog) needs to be
+            // drawn in one frame - this dynamic command buffer has no
+            // add-mem/grow callback set (dk_renderer.cpp only ever calls
+            // m_dyn_cmd_mem.allocate() once, up front), so overflow is a
+            // hard DkResult_OutOfMemory abort ("out of command memory and
+            // no add-mem callback set", dk_cmdbuf.cpp's requestCmdMem) -
+            // confirmed on-device navigating from the small Account tab
+            // into a populated catalog tab. Bumped rather than wiring up a
+            // grow callback, which would need re-plumbing this buffer's
+            // begin/end lifecycle across Flush().
+            static constexpr size_t DynamicCmdSize = 0x100000;
             static constexpr size_t FragmentUniformSize = sizeof(DKNVGfragUniforms) + 4 - sizeof(DKNVGfragUniforms) % 4;
             static constexpr size_t MaxImages = 0x1000;
 
