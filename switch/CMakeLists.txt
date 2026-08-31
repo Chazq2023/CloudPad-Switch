@@ -134,7 +134,7 @@ install(TARGETS chiaki-borealis
 if(CHIAKI_IS_SWITCH)
 	# Version shown by hbmenu. Release builds can keep this aligned with their
 	# release notes by passing -DCLOUDPAD_SWITCH_VERSION=<release version>.
-	set(CLOUDPAD_SWITCH_VERSION "alpha 0.0.1" CACHE STRING "CloudPad Switch release version")
+	set(CLOUDPAD_SWITCH_VERSION "alpha 0.0.2" CACHE STRING "CloudPad Switch release version")
 	add_nro_target(cloudpad
 		chiaki-borealis
 		"CloudPad"
