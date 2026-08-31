@@ -45,7 +45,10 @@ namespace
 		host->SetEventRumbleCallback(std::bind(&IO::SetRumble, io, std::placeholders::_1, std::placeholders::_2));
 		host->SetReadControllerCallback(std::bind(&IO::UpdateControllerState, io, std::placeholders::_1, std::placeholders::_2));
 		host->SetEventConnectedCallback([host]() {
-			brls::Application::setMaximumFPS(0);
+			// The source is at most 60 FPS. An uncapped Borealis loop repeatedly
+			// uploaded and drew the same 1080p frame, wasting enough CPU/GPU time
+			// to require the maximum Switch CPU overclock.
+			brls::Application::setMaximumFPS(60);
 			PSRemotePlay *stream_view = new PSRemotePlay(host);
 			brls::Application::pushView(stream_view);
 			// pushView automatically binds Plus to Application::quit(). That

@@ -19,7 +19,7 @@ same one chiaki-ng's own Switch port uses, so no local devkitPro install is requ
 bash scripts/switch/run-docker-build-chiaki.sh
 ```
 
-This produces `build_switch/switch/chiaki-ng.nro`.
+This produces `build_switch/switch/cloudpad.nro`.
 
 ## Installing / testing on a real Switch
 

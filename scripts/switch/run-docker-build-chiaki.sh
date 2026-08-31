@@ -9,7 +9,5 @@ docker run --rm \
 	/bin/bash -c "scripts/switch/build.sh"
 
 if [[ $? -eq 0 ]]; then
-	sudo chmod -R 777 ./build_switch
-	cp build_switch/switch/chiaki.nro build_switch/switch/chiaki-ng.nro
+    sudo chmod -R 777 ./build_switch
 fi
-

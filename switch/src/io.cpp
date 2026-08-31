@@ -109,7 +109,7 @@ void main()
 }
 )glsl";
 
-int current_frame = 0;
+std::atomic<int> current_frame{0};
 int next_frame = 0;
 
 bool haptic_lock = false;
@@ -430,8 +430,9 @@ send_packet:
 	if(r != 0) {
 		CHIAKI_LOGE(this->log, "Failed to pull frame");
 	} else {
-		current_frame = next_frame;
+		current_frame.store(next_frame, std::memory_order_release);
 		next_frame = (next_frame + 1) % MAX_FRAME_COUNT;
+		this->decoded_frame_generation.fetch_add(1, std::memory_order_release);
 
 		// Cadence detection for Smooth pacing (see io.h): ~16ms gaps between
 		// decoded frames mean a 60fps-like source (present every draw tick),
@@ -655,8 +656,10 @@ bool IO::FreeVideo()
 	}
 
 	this->isFirst = true;
-	current_frame = 0;
+	current_frame.store(0);
 	next_frame = 0;
+	this->decoded_frame_generation.store(0);
+	this->rendered_frame_generation = 0;
 
 	return ret;
 }
@@ -1410,38 +1413,37 @@ inline void IO::SetOpenGlNV12Pixels(AVFrame *frame)
 	}
 
 	isFirst = false;
-	glFinish();
 }
 
 inline void IO::OpenGlDraw()
 {
 	glClear(GL_COLOR_BUFFER_BIT);
 
-	// Standard pacing (default): re-upload the newest decoded frame every
-	// draw tick, same as before pacing existed. Smooth: only re-upload on the
-	// tick matching the detected source cadence (pacing_source_refresh_period,
-	// updated in VideoCB) - skipping the upload the rest of the time leaves
-	// the already-bound textures holding their previously uploaded pixels, so
-	// glDrawArrays below just redraws the same image, which is the "hold the
-	// frame" behavior smooth pacing wants without needing a separate frame
-	// queue (unlike green-nx's AVFrame-queue-based version - see io.h).
-	bool due = true;
+	// Upload only when the decode thread has published a new frame. The GPU
+	// texture retains the previous image between arrivals, so drawing it again
+	// is sufficient and avoids repeatedly transferring the same 1080p NV12
+	// planes. Smooth pacing additionally waits for the detected source cadence.
+	uint64_t decoded_generation = this->decoded_frame_generation.load(std::memory_order_acquire);
+	bool due = decoded_generation != this->rendered_frame_generation;
 	if(this->video_pacing_smooth)
 	{
 		this->pacing_phase++;
-		due = this->pacing_phase >= this->pacing_source_refresh_period;
-		if(due)
+		bool cadence_due = this->pacing_phase >= this->pacing_source_refresh_period;
+		due = due && cadence_due;
+		if(cadence_due)
 			this->pacing_phase = 0;
 	}
 
 	if(due)
 	{
+		int frame_index = current_frame.load(std::memory_order_acquire);
 		if (enableHWAccl) {
-			SetOpenGlNV12Pixels(this->frames[current_frame]);
+			SetOpenGlNV12Pixels(this->frames[frame_index]);
 		} else {
 			// send to OpenGl
-			SetOpenGlYUVPixels(this->frames[current_frame]);
+			SetOpenGlYUVPixels(this->frames[frame_index]);
 		}
+		this->rendered_frame_generation = decoded_generation;
 	}
 
 	//avcodec_flush_buffers(this->codec_context);

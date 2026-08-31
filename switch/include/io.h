@@ -150,6 +150,11 @@ class IO
 		std::condition_variable video_decode_cv;
 		std::thread video_decode_thread;
 		bool video_decode_thread_running = false;
+		// Incremented after a decoded frame has been fully copied into the
+		// presentation ring. The render thread uses it to avoid re-uploading
+		// the same 1080p NV12 frame when no new frame has arrived.
+		std::atomic<uint64_t> decoded_frame_generation{0};
+		uint64_t rendered_frame_generation = 0;
 		void VideoDecodeThreadFunc();
 		bool DecodeFrame(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered);
 
