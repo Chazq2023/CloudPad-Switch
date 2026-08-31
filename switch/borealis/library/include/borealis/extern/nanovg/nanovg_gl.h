@@ -99,6 +99,10 @@ enum NVGimageFlagsGL {
 	NVG_IMAGE_NODELETE			= 1<<16,	// Do not delete GL texture handle.
 };
 
+#ifdef PS4
+#include <nanovg_ps4.h>
+#endif
+
 #ifdef __cplusplus
 }
 #endif
@@ -165,6 +169,8 @@ enum GLNVGcallType {
 	GLNVG_CONVEXFILL,
 	GLNVG_STROKE,
 	GLNVG_TRIANGLES,
+	GLNVG_CONVEXFILL_STENCIL,
+	GLNVG_CONVEXFILL_STENCIL_CLEAR,
 };
 
 struct GLNVGcall {
@@ -268,6 +274,8 @@ struct GLNVGcontext {
 	GLuint stencilFuncMask;
 	GLNVGblend blendFunc;
 	#endif
+
+	int dummyTex;
 };
 typedef struct GLNVGcontext GLNVGcontext;
 
@@ -439,6 +447,10 @@ static int glnvg__createShader(GLNVGshader* shader, const char* name, const char
 	prog = glCreateProgram();
 	vert = glCreateShader(GL_VERTEX_SHADER);
 	frag = glCreateShader(GL_FRAGMENT_SHADER);
+#ifdef PS4
+        glShaderBinary(1, &vert, 2, PS4_SHADER_VERT, PS4_SHADER_VERT_LENGTH);
+        glShaderBinary(1, &frag, 2, PS4_SHADER_FRAG, PS4_SHADER_FRAG_LENGTH);
+#else
 	str[2] = vshader;
 	glShaderSource(vert, 3, str, 0);
 	str[2] = fshader;
@@ -457,6 +469,7 @@ static int glnvg__createShader(GLNVGshader* shader, const char* name, const char
 		glnvg__dumpShaderError(frag, name, "frag");
 		return 0;
 	}
+#endif
 
 	glAttachShader(prog, vert);
 	glAttachShader(prog, frag);
@@ -499,6 +512,8 @@ static void glnvg__getUniforms(GLNVGshader* shader)
 	shader->loc[GLNVG_LOC_FRAG] = glGetUniformLocation(shader->prog, "frag");
 #endif
 }
+
+static int glnvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data);
 
 static int glnvg__renderCreate(void* uptr)
 {
@@ -648,6 +663,9 @@ static int glnvg__renderCreate(void* uptr)
 		"#endif\n"
 		"		if (texType == 1) color = vec4(color.xyz*color.w,color.w);"
 		"		if (texType == 2) color = vec4(color.x);"
+#ifndef __PSV__
+		"		if (texType == 3 && color.a == 1.0) discard;"
+#endif
 		"		// Apply color tint and alpha.\n"
 		"		color *= innerCol;\n"
 		"		// Combine alpha\n"
@@ -699,6 +717,10 @@ static int glnvg__renderCreate(void* uptr)
 	glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
 #endif
 	gl->fragSize = sizeof(GLNVGfragUniforms) + align - sizeof(GLNVGfragUniforms) % align;
+
+	// Some platforms does not allow to have samples to unset textures.
+	// Create empty one which is bound when there's no texture specified.
+	gl->dummyTex = glnvg__renderCreateTexture(gl, NVG_TEXTURE_ALPHA, 1, 1, 0, NULL);
 
 	glnvg__checkError(gl, "create done");
 
@@ -947,12 +969,18 @@ static int glnvg__convertPaint(GLNVGcontext* gl, GLNVGfragUniforms* frag, NVGpai
 
 		#if NANOVG_GL_USE_UNIFORMBUFFER
 		if (tex->type == NVG_TEXTURE_RGBA)
-			frag->texType = (tex->flags & NVG_IMAGE_PREMULTIPLIED) ? 0 : 1;
+			if (scissor->stencilFlag)
+				frag->texType = 3;
+			else
+				frag->texType = (tex->flags & NVG_IMAGE_PREMULTIPLIED) ? 0 : 1;
 		else
 			frag->texType = 2;
 		#else
 		if (tex->type == NVG_TEXTURE_RGBA)
-			frag->texType = (tex->flags & NVG_IMAGE_PREMULTIPLIED) ? 0.0f : 1.0f;
+			if (scissor->stencilFlag)
+				frag->texType = 3.0f;
+			else
+				frag->texType = (tex->flags & NVG_IMAGE_PREMULTIPLIED) ? 0.0f : 1.0f;
 		else
 			frag->texType = 2.0f;
 		#endif
@@ -973,6 +1001,7 @@ static GLNVGfragUniforms* nvg__fragUniformPtr(GLNVGcontext* gl, int i);
 
 static void glnvg__setUniforms(GLNVGcontext* gl, int uniformOffset, int image)
 {
+	GLNVGtexture* tex = NULL;
 #if NANOVG_GL_USE_UNIFORMBUFFER
 	glBindBufferRange(GL_UNIFORM_BUFFER, GLNVG_FRAG_BINDING, gl->fragBuf, uniformOffset, sizeof(GLNVGfragUniforms));
 #else
@@ -981,12 +1010,14 @@ static void glnvg__setUniforms(GLNVGcontext* gl, int uniformOffset, int image)
 #endif
 
 	if (image != 0) {
-		GLNVGtexture* tex = glnvg__findTexture(gl, image);
-		glnvg__bindTexture(gl, tex != NULL ? tex->tex : 0);
-		glnvg__checkError(gl, "tex paint tex");
-	} else {
-		glnvg__bindTexture(gl, 0);
+		tex = glnvg__findTexture(gl, image);
 	}
+	// If no image is set, use empty texture
+	if (tex == NULL) {
+		tex = glnvg__findTexture(gl, gl->dummyTex);
+	}
+	glnvg__bindTexture(gl, tex != NULL ? tex->tex : 0);
+	glnvg__checkError(gl, "tex paint tex");
 }
 
 static void glnvg__renderViewport(void* uptr, float width, float height, float devicePixelRatio)
@@ -1056,6 +1087,26 @@ static void glnvg__convexFill(GLNVGcontext* gl, GLNVGcall* call)
 			glDrawArrays(GL_TRIANGLE_STRIP, paths[i].strokeOffset, paths[i].strokeCount);
 		}
 	}
+}
+
+static void glnvg__convexFillStencil(GLNVGcontext* gl, GLNVGcall* call)
+{
+	glEnable(GL_STENCIL_TEST);
+	glnvg__stencilFunc(gl, GL_ALWAYS, 1, 0xFF);
+	glStencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE);
+	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+	glnvg__convexFill(gl, call);
+
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glnvg__stencilFunc(gl, GL_EQUAL, 0, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+}
+
+static void glnvg__convexFillStencilClear(GLNVGcontext* gl, GLNVGcall* call)
+{
+	glClear(GL_STENCIL_BUFFER_BIT);
+	glDisable(GL_STENCIL_TEST);
 }
 
 static void glnvg__stroke(GLNVGcontext* gl, GLNVGcall* call)
@@ -1235,6 +1286,10 @@ static void glnvg__renderFlush(void* uptr)
 				glnvg__stroke(gl, call);
 			else if (call->type == GLNVG_TRIANGLES)
 				glnvg__triangles(gl, call);
+			else if (call->type == GLNVG_CONVEXFILL_STENCIL)
+				glnvg__convexFillStencil(gl, call);
+			else if (call->type == GLNVG_CONVEXFILL_STENCIL_CLEAR)
+				glnvg__convexFillStencilClear(gl, call);
 		}
 
 		glDisableVertexAttribArray(0);
@@ -1363,7 +1418,12 @@ static void glnvg__renderFill(void* uptr, NVGpaint* paint, NVGcompositeOperation
 
 	if (npaths == 1 && paths[0].convex)
 	{
-		call->type = GLNVG_CONVEXFILL;
+		if (scissor->stencilFlag == NVG_STENCIL_DEFAULT)
+			call->type = GLNVG_CONVEXFILL;
+		else if (scissor->stencilFlag == NVG_STENCIL_ENABLE)
+			call->type = GLNVG_CONVEXFILL_STENCIL;
+		else if (scissor->stencilFlag == NVG_STENCIL_CLEAR)
+			call->type = GLNVG_CONVEXFILL_STENCIL_CLEAR;
 		call->triangleCount = 0;	// Bounding box fill quad not needed for convex fill
 	}
 
@@ -1481,7 +1541,7 @@ error:
 }
 
 static void glnvg__renderTriangles(void* uptr, NVGpaint* paint, NVGcompositeOperationState compositeOperation, NVGscissor* scissor,
-								   const NVGvertex* verts, int nverts)
+								   const NVGvertex* verts, int nverts, float fringe)
 {
 	GLNVGcontext* gl = (GLNVGcontext*)uptr;
 	GLNVGcall* call = glnvg__allocCall(gl);
@@ -1504,7 +1564,7 @@ static void glnvg__renderTriangles(void* uptr, NVGpaint* paint, NVGcompositeOper
 	call->uniformOffset = glnvg__allocFragUniforms(gl, 1);
 	if (call->uniformOffset == -1) goto error;
 	frag = nvg__fragUniformPtr(gl, call->uniformOffset);
-	glnvg__convertPaint(gl, frag, paint, scissor, 1.0f, 1.0f, -1.0f);
+	glnvg__convertPaint(gl, frag, paint, scissor, 1.0f, fringe, -1.0f);
 	frag->type = NSVG_SHADER_IMG;
 
 	return;

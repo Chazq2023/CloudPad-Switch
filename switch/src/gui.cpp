@@ -6,11 +6,8 @@
 #include "gui.h"
 #include <chiaki/log.h>
 
-#define SCREEN_W 1280
-#define SCREEN_H 720
-
 // TODO
-using namespace brls::i18n::literals; // for _i18n
+using namespace brls::literals; // for _i18n
 
 MainApplication::MainApplication()
 {
@@ -28,14 +25,14 @@ MainApplication::~MainApplication()
 bool MainApplication::Load()
 {
 	// Init the app
-	brls::Logger::setLogLevel(brls::LogLevel::DEBUG);
+	brls::Logger::setLogLevel(brls::LogLevel::LOG_DEBUG);
 
-	brls::i18n::loadTranslations();
-	if(!brls::Application::init("CloudPad"))
+	if(!brls::Application::init())
 	{
 		brls::Logger::error("Unable to init Borealis application");
 		return false;
 	}
+	brls::Application::createWindow("CloudPad");
 
 	// init chiaki gl after borealis
 	// let borealis manage the main screen/window
@@ -50,91 +47,114 @@ bool MainApplication::Load()
 		brls::Logger::error("Failed to initiate Controller");
 	}
 
-	// Create a view
-	this->rootFrame = new brls::TabFrame();
-	this->rootFrame->setTitle("CloudPad");
-	this->rootFrame->setIcon(BOREALIS_ASSET("cloudpad-icon.png"));
+	// Create a view. TabFrame::addTab (new Borealis) takes a lazy
+	// std::function<View*(void)> rather than an eagerly-built View* - it
+	// frees the current tab's view and calls the creator again on every
+	// switch ("only one tab is kept in memory at all times"), so each
+	// lambda below must build a fresh view rather than capture one built
+	// up front, or the second visit to a tab would dereference an already
+	// freed pointer.
+	brls::TabFrame *rootFrame = new brls::TabFrame();
 
-	brls::List *account = new brls::List();
-	BuildAccountMenu(account);
-	this->rootFrame->addTab("Account", account);
+	MainApplication *self = this;
+	rootFrame->addTab("Account", [self]() -> brls::View* {
+		brls::Box *box = new brls::Box();
+		box->setAxis(brls::Axis::COLUMN);
+		self->BuildAccountMenu(box);
+		brls::ScrollingFrame *scroll = new brls::ScrollingFrame();
+		scroll->setContentView(box);
+		return scroll;
+	});
 
-	this->rootFrame->addSeparator();
+	rootFrame->addSeparator();
 	brls::Logger::info("Building cloud catalog tabs");
 	const std::pair<std::string, std::string> cloud_tabs[] = {
 		{ "PS3", "ps3" }, { "PS4", "ps4" }, { "PS5", "ps5" }
 	};
+	Settings *settings = this->settings;
+	ChiakiLog *log = this->log;
 	for(const auto &tab : cloud_tabs)
 	{
-		CloudGameList *list = new CloudGameList(this->settings, this->log, tab.second, this->rootFrame);
-		brls::SidebarItem *item = this->rootFrame->addTab(tab.first, list);
-		list->SetSidebarItem(item);
+		std::string platform = tab.second;
+		rootFrame->addTab(tab.first, [settings, log, platform]() -> brls::View* {
+			return new CloudGameList(settings, log, platform);
+		});
 	}
 	brls::Logger::info("Cloud catalog tabs built");
 
-	brls::Application::pushView(this->rootFrame);
+	brls::Application::pushActivity(new brls::Activity(rootFrame));
 	brls::Logger::info("Root view pushed, entering main loop");
 
 	while (brls::Application::mainLoop()) {
 	}
-	
+
 	return true;
 }
 
-void MainApplication::BuildAccountMenu(brls::List *ls)
+void MainApplication::BuildAccountMenu(brls::Box *box)
 {
-	brls::Label *info = new brls::Label(brls::LabelStyle::REGULAR,
-		"PlayStation Account", true);
-	ls->addView(info);
+	brls::Label *info = new brls::Label();
+	info->setText("PlayStation Account");
+	box->addView(info);
 
-	brls::Label *instructions = new brls::Label(brls::LabelStyle::REGULAR,
+	brls::Label *instructions = new brls::Label();
+	instructions->setText(
 		"On a phone or PC: sign in at store.playstation.com, then open "
 		"https://ca.account.sony.com/api/v1/ssocookie in the same signed-in browser "
-		"and copy the npsso value shown there. Paste it below to sign in.", true);
-	ls->addView(instructions);
+		"and copy the npsso value shown there. Paste it below to sign in.");
+	// Label only wraps once its width is constrained - see label.hpp.
+	instructions->setWidthPercentage(100);
+	box->addView(instructions);
 
-	this->cloud_login_status = new brls::ListItem("Status");
-	ls->addView(this->cloud_login_status);
+	this->cloud_login_status = new brls::DetailCell();
+	this->cloud_login_status->setText("Status");
+	box->addView(this->cloud_login_status);
 
-	this->sign_in_item = new brls::ListItem("Sign in with PlayStation");
-	this->sign_in_item->getClickEvent()->subscribe([this](brls::View *view) {
+	this->sign_in_item = new brls::DetailCell();
+	this->sign_in_item->setText("Sign in with PlayStation");
+	this->sign_in_item->registerClickAction([this](brls::View *view) {
 		this->SignIn();
+		return true;
 	});
-	ls->addView(this->sign_in_item);
+	box->addView(this->sign_in_item);
 
-	this->sign_out_item = new brls::ListItem("Sign out");
-	this->sign_out_item->getClickEvent()->subscribe([this](brls::View *view) {
+	this->sign_out_item = new brls::DetailCell();
+	this->sign_out_item->setText("Sign out");
+	this->sign_out_item->registerClickAction([this](brls::View *view) {
 		this->SignOut();
+		return true;
 	});
-	ls->addView(this->sign_out_item);
+	box->addView(this->sign_out_item);
 
-	brls::Label *stream_info = new brls::Label(brls::LabelStyle::REGULAR,
-		"Stream settings", true);
-	ls->addView(stream_info);
+	brls::Label *stream_info = new brls::Label();
+	stream_info->setText("Stream settings");
+	box->addView(stream_info);
 
 	static const std::vector<std::string> kResolutionChoices = { "720p", "1080p" };
 
 	int ps5_resolution_index = this->settings->GetPs5LibraryResolution() == CHIAKI_VIDEO_RESOLUTION_PRESET_720p ? 0 : 1;
-	brls::SelectListItem *ps5_resolution = new brls::SelectListItem(
-		"PS5 Library Resolution", kResolutionChoices, ps5_resolution_index);
-	ps5_resolution->getValueSelectedEvent()->subscribe([this](int result) {
-		this->settings->SetPs5LibraryResolution(result == 1
-			? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
-			: CHIAKI_VIDEO_RESOLUTION_PRESET_720p);
-		this->settings->WriteFile();
-	});
-	ls->addView(ps5_resolution);
+	brls::SelectorCell *ps5_resolution = new brls::SelectorCell();
+	ps5_resolution->init("PS5 Library Resolution", kResolutionChoices, ps5_resolution_index,
+		[](int selected) {},
+		[this](int result) {
+			this->settings->SetPs5LibraryResolution(result == 1
+				? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+				: CHIAKI_VIDEO_RESOLUTION_PRESET_720p);
+			this->settings->WriteFile();
+		});
+	box->addView(ps5_resolution);
 
 	int ps34_resolution_index = this->settings->GetPs34CatalogResolution() == CHIAKI_VIDEO_RESOLUTION_PRESET_720p ? 0 : 1;
-	brls::SelectListItem *ps34_resolution = new brls::SelectListItem(
-		"PS3/PS4 Catalog Resolution", kResolutionChoices, ps34_resolution_index);
-	ps34_resolution->getValueSelectedEvent()->subscribe([this](int result) {
-		this->settings->SetPs34CatalogResolution(result == 1
-			? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
-			: CHIAKI_VIDEO_RESOLUTION_PRESET_720p);
-		this->settings->WriteFile();
-	});
-	ls->addView(ps34_resolution);
+	brls::SelectorCell *ps34_resolution = new brls::SelectorCell();
+	ps34_resolution->init("PS3/PS4 Catalog Resolution", kResolutionChoices, ps34_resolution_index,
+		[](int selected) {},
+		[this](int result) {
+			this->settings->SetPs34CatalogResolution(result == 1
+				? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+				: CHIAKI_VIDEO_RESOLUTION_PRESET_720p);
+			this->settings->WriteFile();
+		});
+	box->addView(ps34_resolution);
 
 	// 0 = use the resolution preset's own default bitrate (10/15 Mbps for
 	// 720p/1080p respectively, set by chiaki_connect_video_profile_preset).
@@ -150,40 +170,44 @@ void MainApplication::BuildAccountMenu(brls::List *ls)
 		return index;
 	};
 
-	brls::SelectListItem *ps5_bitrate = new brls::SelectListItem("PS5 Library Bitrate",
-		kBitrateChoiceLabels, bitrate_index_for(this->settings->GetPs5LibraryBitrateKbps()));
-	ps5_bitrate->getValueSelectedEvent()->subscribe([this](int result) {
-		this->settings->SetPs5LibraryBitrateKbps(kBitrateChoicesKbps[result]);
-		this->settings->WriteFile();
-	});
-	ls->addView(ps5_bitrate);
+	brls::SelectorCell *ps5_bitrate = new brls::SelectorCell();
+	ps5_bitrate->init("PS5 Library Bitrate", kBitrateChoiceLabels,
+		bitrate_index_for(this->settings->GetPs5LibraryBitrateKbps()),
+		[](int selected) {},
+		[this](int result) {
+			this->settings->SetPs5LibraryBitrateKbps(kBitrateChoicesKbps[result]);
+			this->settings->WriteFile();
+		});
+	box->addView(ps5_bitrate);
 
-	brls::SelectListItem *ps34_bitrate = new brls::SelectListItem("PS3/PS4 Catalog Bitrate",
-		kBitrateChoiceLabels, bitrate_index_for(this->settings->GetPs34CatalogBitrateKbps()));
-	ps34_bitrate->getValueSelectedEvent()->subscribe([this](int result) {
-		this->settings->SetPs34CatalogBitrateKbps(kBitrateChoicesKbps[result]);
-		this->settings->WriteFile();
-	});
-	ls->addView(ps34_bitrate);
+	brls::SelectorCell *ps34_bitrate = new brls::SelectorCell();
+	ps34_bitrate->init("PS3/PS4 Catalog Bitrate", kBitrateChoiceLabels,
+		bitrate_index_for(this->settings->GetPs34CatalogBitrateKbps()),
+		[](int selected) {},
+		[this](int result) {
+			this->settings->SetPs34CatalogBitrateKbps(kBitrateChoicesKbps[result]);
+			this->settings->WriteFile();
+		});
+	box->addView(ps34_bitrate);
 
-	brls::SelectListItem *sharpen = new brls::SelectListItem("Image sharpening",
-		{ "Off", "Low", "Medium", "High" }, this->settings->GetSharpenLevel());
-	auto sharpen_cb = [this](int result) {
-		this->settings->SetSharpenLevel(result);
-		this->settings->WriteFile();
-	};
-	sharpen->getValueSelectedEvent()->subscribe(sharpen_cb);
-	ls->addView(sharpen);
+	brls::SelectorCell *sharpen = new brls::SelectorCell();
+	sharpen->init("Image sharpening", { "Off", "Low", "Medium", "High" }, this->settings->GetSharpenLevel(),
+		[](int selected) {},
+		[this](int result) {
+			this->settings->SetSharpenLevel(result);
+			this->settings->WriteFile();
+		});
+	box->addView(sharpen);
 
-	brls::SelectListItem *pacing = new brls::SelectListItem("Video pacing",
-		{ "Standard (lowest latency)", "Smooth (steadier motion)" },
-		this->settings->GetVideoPacingSmooth() ? 1 : 0);
-	auto pacing_cb = [this](int result) {
-		this->settings->SetVideoPacingSmooth(result == 1);
-		this->settings->WriteFile();
-	};
-	pacing->getValueSelectedEvent()->subscribe(pacing_cb);
-	ls->addView(pacing);
+	brls::SelectorCell *pacing = new brls::SelectorCell();
+	pacing->init("Video pacing", { "Standard (lowest latency)", "Smooth (steadier motion)" },
+		this->settings->GetVideoPacingSmooth() ? 1 : 0,
+		[](int selected) {},
+		[this](int result) {
+			this->settings->SetVideoPacingSmooth(result == 1);
+			this->settings->WriteFile();
+		});
+	box->addView(pacing);
 
 	this->RefreshLoginStatus();
 }
@@ -194,7 +218,7 @@ void MainApplication::RefreshLoginStatus()
 		return;
 
 	bool logged_in = this->settings->IsCloudLoggedIn();
-	this->cloud_login_status->setValue(logged_in ? "Signed in" : "Not signed in");
+	this->cloud_login_status->setDetailText(logged_in ? "Signed in" : "Not signed in");
 
 	if(this->sign_in_item != nullptr && this->sign_out_item != nullptr)
 	{
@@ -247,7 +271,7 @@ void MainApplication::SignIn()
 		brls::Application::notify("Signed in with PlayStation");
 	};
 
-	brls::Swkbd::openForText(npsso_cb,
+	brls::Application::getImeManager()->openForText(npsso_cb,
 		"Paste your npsso value",
 		"From the ssocookie page on your phone/PC browser", 512, "", 0);
 }

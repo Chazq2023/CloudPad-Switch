@@ -58,7 +58,7 @@ namespace
 	// Marks a title's real streamed outcome, both persisted (Settings) and on
 	// its row's icon - called from every outcome point below (Kamaji/Gaikai
 	// failure, session-start exception, or a real EventConnectedCallback).
-	void RecordStreamOutcome(Settings *settings, const std::string &product_id, brls::ListItem *item, bool success)
+	void RecordStreamOutcome(Settings *settings, const std::string &product_id, brls::DetailCell *item, bool success)
 	{
 		StreamableState state = success ? StreamableState::Streamable : StreamableState::NotStreamable;
 		if(settings != nullptr && !product_id.empty())
@@ -67,14 +67,14 @@ namespace
 			settings->WriteFile();
 		}
 		if(item != nullptr)
-			item->setValue(GlyphForStreamable(state));
+			item->setDetailText(GlyphForStreamable(state));
 	}
 
 	// Wires up the same connected/quit/rumble/controller callbacks
 	// HostInterface sets for local sessions (switch/src/gui.cpp), without the
 	// per-host settings list rows HostInterface also builds - a cloud stream
 	// has no "host" to configure, just a session to start.
-	void StartCloudStream(Host *host, Settings *settings, std::string product_id, brls::ListItem *item)
+	void StartCloudStream(Host *host, Settings *settings, std::string product_id, brls::DetailCell *item)
 	{
 		IO *io = IO::GetInstance();
 
@@ -93,16 +93,18 @@ namespace
 			// repeatedly uploaded and drew the same 1080p frame, wasting
 			// enough CPU/GPU time to require the maximum Switch CPU
 			// overclock.
-			brls::Application::setMaximumFPS(60);
+			brls::Application::setLimitedFPS(60);
 			RecordStreamOutcome(settings, product_id, item, true);
 			PSRemotePlay *stream_view = new PSRemotePlay(host);
-			brls::Application::pushView(stream_view);
-			// pushView automatically binds Plus to Application::quit(). That
-			// makes ZL+ZR+Plus close the entire NRO before UpdateControllerState
-			// can turn it into a stream-exit request. Consume Borealis's Plus
-			// action on this view only; IO still forwards Plus to the remote
-			// controller state, and handles the full combo during draw.
-			stream_view->registerAction("", brls::Key::PLUS, []() {
+			brls::Application::pushActivity(new brls::Activity(stream_view));
+			// A pushed Activity automatically binds BUTTON_START to
+			// Application::quit() (the old fork's pushView bound Plus the
+			// same way). That makes ZL+ZR+Plus close the entire NRO before
+			// UpdateControllerState can turn it into a stream-exit request.
+			// Consume Borealis's Start action on this activity's content view
+			// only; IO still forwards Plus to the remote controller state,
+			// and handles the full combo during draw.
+			stream_view->registerAction("", brls::BUTTON_START, [](brls::View *) {
 				return true;
 			}, true);
 		});
@@ -137,7 +139,7 @@ namespace
 	// explicitly joined via chiaki_thread_create/chiaki_thread_join. Running
 	// synchronously on the main thread, as below, is the proven-stable
 	// behavior.
-	void StartPsnowGame(Settings *settings, ChiakiLog *log, const CloudGame &game, brls::ListItem *item)
+	void StartPsnowGame(Settings *settings, ChiakiLog *log, const CloudGame &game, brls::DetailCell *item)
 	{
 		std::string npsso = settings->GetNPSSO();
 		std::string duid = settings->GetOrCreateDUID();
@@ -195,7 +197,7 @@ namespace
 	// came straight from FetchOwnedPs5CloudGames's ownership cross-reference,
 	// which is the PS5 equivalent of what Kamaji's product-id conversion does
 	// for PSNOW (see cloudcatalog.h).
-	void StartPscloudGame(Settings *settings, ChiakiLog *log, const CloudGame &game, brls::ListItem *item)
+	void StartPscloudGame(Settings *settings, ChiakiLog *log, const CloudGame &game, brls::DetailCell *item)
 	{
 		if(game.entitlement_id.empty())
 		{
@@ -240,15 +242,31 @@ namespace
 	}
 }
 
-CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string platform,
-	brls::TabFrame *root_frame, bool force_refresh, std::string filter)
-	: settings(settings), log(log), platform(platform), root_frame(root_frame), filter(filter)
+CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string platform)
+	: settings(settings), log(log), platform(platform)
 {
-	CloudCatalog catalog(log);
+	this->rowsBox = new brls::Box();
+	this->rowsBox->setAxis(brls::Axis::COLUMN);
+	this->setContentView(this->rowsBox);
+
+	this->registerAction("Search", brls::BUTTON_BACK, [this](brls::View *) {
+		this->Search();
+		return true;
+	});
+
+	this->BuildRows(false);
+}
+
+void CloudGameList::BuildRows(bool force_refresh)
+{
+	this->rowsBox->clearViews();
+	this->status = nullptr;
+
+	CloudCatalog catalog(this->log);
 	std::vector<CloudGame> games;
 	std::string error;
 	bool ok;
-	bool needs_login = settings->GetNPSSO().empty();
+	bool needs_login = this->settings->GetNPSSO().empty();
 
 	// PS5's "Library" only ever lists titles this account owns (PS Plus
 	// Premium cloud streaming is per-title-owned, not subscription-wide like
@@ -262,20 +280,20 @@ CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string pla
 	else
 	{
 		brls::Application::blockInputs();
-		if(platform == "ps5")
+		if(this->platform == "ps5")
 		{
-			ok = catalog.FetchOwnedPs5CloudGames(settings->GetNPSSO(), "en-US", &games, &error, force_refresh);
+			ok = catalog.FetchOwnedPs5CloudGames(this->settings->GetNPSSO(), "en-US", &games, &error, force_refresh);
 		}
 		else
 		{
-			std::string npsso = settings->GetNPSSO();
-			std::string duid = settings->GetOrCreateDUID();
+			std::string npsso = this->settings->GetNPSSO();
+			std::string duid = this->settings->GetOrCreateDUID();
 			std::vector<CloudGame> all_games;
 			ok = catalog.FetchPsnowCatalog(npsso, duid, &all_games, &error, force_refresh);
 			if(ok)
 			{
 				for(const auto &g : all_games)
-					if(g.platform == platform)
+					if(g.platform == this->platform)
 						games.push_back(g);
 			}
 		}
@@ -289,138 +307,95 @@ CloudGameList::CloudGameList(Settings *settings, ChiakiLog *log, std::string pla
 		}
 	}
 
-	brls::ListItem *reset_search = new brls::ListItem("Reset Search");
-	reset_search->getClickEvent()->subscribe([this](brls::View *view) {
-		if(this->filter.empty() || !this->sidebar_item || !this->root_frame)
-			return;
-		CloudGameList *fresh = new CloudGameList(this->settings, this->log, this->platform, this->root_frame, false, "");
-		fresh->SetSidebarItem(this->sidebar_item);
-		this->sidebar_item->setAssociatedView(fresh);
-		this->root_frame->switchToView(fresh);
-	});
-	this->addView(reset_search);
+	if(!this->filter.empty())
+	{
+		brls::DetailCell *reset_search = new brls::DetailCell();
+		reset_search->setText("Reset Search");
+		reset_search->registerClickAction([this](brls::View *view) {
+			this->filter = "";
+			this->BuildRows(false);
+			return true;
+		});
+		this->rowsBox->addView(reset_search);
+	}
 
-	brls::ListItem *refresh_item = new brls::ListItem("Refresh catalog");
-	refresh_item->getClickEvent()->subscribe([this](brls::View *view) {
+	brls::DetailCell *refresh_item = new brls::DetailCell();
+	refresh_item->setText("Refresh catalog");
+	refresh_item->registerClickAction([this](brls::View *view) {
 		this->Refresh();
+		return true;
 	});
-	this->addView(refresh_item);
+	this->rowsBox->addView(refresh_item);
 
-	brls::ListItem *status = new brls::ListItem(platform == "ps5" ? "PS5 Library" : "PSNOW Catalog");
-	this->addView(status);
+	this->status = new brls::DetailCell();
+	this->status->setText(this->platform == "ps5" ? "PS5 Library" : "PSNOW Catalog");
+	this->rowsBox->addView(this->status);
 
 	if(!ok)
 	{
-		CHIAKI_LOGE(log, "CloudGameList: failed to load %s catalog: %s", platform.c_str(), error.c_str());
-		status->setValue("Failed to load");
-		brls::Label *error_label = new brls::Label(brls::LabelStyle::REGULAR, error, true);
-		this->addView(error_label);
+		CHIAKI_LOGE(this->log, "CloudGameList: failed to load %s catalog: %s", this->platform.c_str(), error.c_str());
+		this->status->setDetailText("Failed to load");
+		brls::Label *error_label = new brls::Label();
+		error_label->setText(error);
+		error_label->setWidthPercentage(100);
+		this->rowsBox->addView(error_label);
 		return;
 	}
 
 	int shown_count = 0;
-	bool is_ps5 = platform == "ps5";
+	bool is_ps5 = this->platform == "ps5";
 	for(const auto &game : games)
 	{
 		if(!this->filter.empty() && !ContainsCaseInsensitive(game.name, this->filter))
 			continue;
 
-		brls::ListItem *item = new brls::ListItem(game.name.empty() ? game.product_id : game.name);
+		brls::DetailCell *item = new brls::DetailCell();
+		item->setText(game.name.empty() ? game.product_id : game.name);
 		// A confirmed real outcome (a previous stream attempt) always wins;
 		// otherwise fall back to the catalog-derived guess, which can only
 		// ever suggest "streamable" - matches CloudPad Android's
 		// applyStreamabilityHints precedence (PsCloudOwnership.kt).
-		StreamableState initial_state = settings->GetTitleStreamable(game.product_id);
+		StreamableState initial_state = this->settings->GetTitleStreamable(game.product_id);
 		if(initial_state == StreamableState::Unknown && game.catalog_streamable)
 			initial_state = StreamableState::Streamable;
-		item->setValue(GlyphForStreamable(initial_state));
+		item->setDetailText(GlyphForStreamable(initial_state));
+		Settings *settings = this->settings;
+		ChiakiLog *log = this->log;
 		if(is_ps5)
 		{
-			item->getClickEvent()->subscribe([settings, log, game, item](brls::View *view) {
+			item->registerClickAction([settings, log, game, item](brls::View *view) {
 				StartPscloudGame(settings, log, game, item);
+				return true;
 			});
 		}
 		else
 		{
-			item->getClickEvent()->subscribe([settings, log, game, item](brls::View *view) {
+			item->registerClickAction([settings, log, game, item](brls::View *view) {
 				StartPsnowGame(settings, log, game, item);
+				return true;
 			});
 		}
-		this->addView(item);
+		this->rowsBox->addView(item);
 		shown_count++;
 	}
 
-	status->setValue(this->filter.empty()
+	this->status->setDetailText(this->filter.empty()
 		? fmt::format("{} games", games.size())
 		: fmt::format("{} of {} games", shown_count, games.size()));
 }
 
-void CloudGameList::SetSidebarItem(brls::SidebarItem *item)
-{
-	this->sidebar_item = item;
-}
-
-void CloudGameList::willAppear(bool resetState)
-{
-	brls::List::willAppear(resetState);
-
-	if(this->root_frame != nullptr)
-	{
-		this->root_frame->registerAction("Search", brls::Key::MINUS, [this]() {
-			this->Search();
-			return true;
-		});
-		brls::Application::getGlobalHintsUpdateEvent()->fire();
-	}
-}
-
-void CloudGameList::willDisappear(bool resetState)
-{
-	brls::List::willDisappear(resetState);
-
-	// Restore Application::pushView's original hidden FPS-toggle binding on
-	// the shared TabFrame (see the comment on willAppear/willDisappear in the
-	// header) so leaving this tab doesn't leave Minus permanently repurposed.
-	if(this->root_frame != nullptr)
-	{
-		this->root_frame->registerAction("FPS", brls::Key::MINUS, []() {
-			brls::Application::toggleFramerateDisplay();
-			return true;
-		}, true);
-		brls::Application::getGlobalHintsUpdateEvent()->fire();
-	}
-}
-
 void CloudGameList::Refresh()
 {
-	if(!this->sidebar_item || !this->root_frame)
-		return;
-
 	brls::Application::notify("Refreshing catalog...");
-
-	// Build a fresh replacement rather than mutating this list's own rows in
-	// place - Borealis's BoxLayout::removeView is documented as unsafe to use
-	// at runtime. TabFrame::switchToView's own tab-switching path already
-	// does the equivalent swap safely (removeView(1, false), i.e. without
-	// freeing), so retargeting the SidebarItem at a new view and asking the
-	// frame to switch to it reuses that same proven path instead of a new one.
-	CloudGameList *fresh = new CloudGameList(this->settings, this->log, this->platform, this->root_frame, true, this->filter);
-	fresh->SetSidebarItem(this->sidebar_item);
-	this->sidebar_item->setAssociatedView(fresh);
-	this->root_frame->switchToView(fresh);
+	this->BuildRows(true);
 }
 
 void CloudGameList::Search()
 {
-	if(!this->sidebar_item || !this->root_frame)
-		return;
-
 	auto submit_cb = [this](std::string text) {
-		CloudGameList *fresh = new CloudGameList(this->settings, this->log, this->platform, this->root_frame, false, text);
-		fresh->SetSidebarItem(this->sidebar_item);
-		this->sidebar_item->setAssociatedView(fresh);
-		this->root_frame->switchToView(fresh);
+		this->filter = text;
+		this->BuildRows(false);
 	};
 
-	brls::Swkbd::openForText(submit_cb, "Search titles", "", 64, this->filter, 0);
+	brls::Application::getImeManager()->openForText(submit_cb, "Search titles", "", 64, this->filter, 0);
 }

@@ -3,17 +3,9 @@
 #ifndef CHIAKI_GUI_H
 #define CHIAKI_GUI_H
 
-#include <glad.h>
-#include <GLFW/glfw3.h>
-#include "nanovg.h"
-#include "nanovg_gl.h"
-#include "nanovg_gl_utils.h"
-
-#include <map>
-#include <thread>
-#include <fmt/format.h>
-
 #include <borealis.hpp>
+#include <borealis/views/cells/cell_detail.hpp>
+
 #include "cloudauth.h"
 #include "host.h"
 #include "io.h"
@@ -27,12 +19,11 @@ class MainApplication
 		Settings *settings;
 		ChiakiLog *log;
 		IO *io;
-		brls::TabFrame *rootFrame;
-		brls::ListItem *cloud_login_status = nullptr;
-		brls::ListItem *sign_in_item = nullptr;
-		brls::ListItem *sign_out_item = nullptr;
+		brls::DetailCell *cloud_login_status = nullptr;
+		brls::DetailCell *sign_in_item = nullptr;
+		brls::DetailCell *sign_out_item = nullptr;
 
-		void BuildAccountMenu(brls::List *);
+		void BuildAccountMenu(brls::Box *box);
 		void SignIn();
 		void SignOut();
 		void RefreshLoginStatus();

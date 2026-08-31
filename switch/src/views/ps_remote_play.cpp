@@ -5,7 +5,7 @@ PSRemotePlay::PSRemotePlay(Host *host)
 	this->io = IO::GetInstance();
 }
 
-void PSRemotePlay::draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx)
+void PSRemotePlay::draw(NVGcontext *vg, float x, float y, float width, float height, brls::Style style, brls::FrameContext *ctx)
 {
 	this->io->MainLoop();
 	this->host->SendFeedbackState();
@@ -27,9 +27,9 @@ void PSRemotePlay::draw(NVGcontext *vg, int x, int y, unsigned width, unsigned h
 		this->io->exit_stream_requested.store(false);
 		this->io->FreeVideo();
 		brls::Application::unblockInputs();
-		brls::Application::setMaximumFPS(60);
+		brls::Application::setLimitedFPS(60);
 		brls::Application::notify("Stream closed");
-		brls::Application::popView();
+		brls::Application::popActivity();
 		return;
 	}
 }

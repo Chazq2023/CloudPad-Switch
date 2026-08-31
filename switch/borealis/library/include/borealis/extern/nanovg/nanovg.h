@@ -132,6 +132,7 @@ struct NVGtextRow {
 	const char* next;	// Pointer to the beginning of the next row.
 	float width;		// Logical width of the row.
 	float minx, maxx;	// Actual bounds of the row. Logical with and bounds can differ because of kerning and some parts over extending.
+    int size;           // Number of characters in the row.
 };
 typedef struct NVGtextRow NVGtextRow;
 
@@ -142,6 +143,14 @@ enum NVGimageFlags {
 	NVG_IMAGE_FLIPY				= 1<<3,		// Flips (inverses) image in Y direction when rendered.
 	NVG_IMAGE_PREMULTIPLIED		= 1<<4,		// Image data has premultiplied alpha.
 	NVG_IMAGE_NEAREST			= 1<<5,		// Image interpolation is Nearest instead Linear
+	NVG_IMAGE_STREAMING  		= 1<<6,		// Image d3d11 flags Usage = D3D11_USAGE_DYNAMIC,CPUAccessFlags = D3D11_CPU_ACCESS_WRITE.
+	NVG_IMAGE_COPY_SWAP 		= 1<<7,		// Image d3d11 flags UpdateTexture use swap texture.
+};
+
+enum NVGstencilFlags {
+	NVG_STENCIL_DEFAULT	= 0,
+	NVG_STENCIL_ENABLE	= 1<<0,
+	NVG_STENCIL_CLEAR	= 1<<1,
 };
 
 // Begin drawing a new frame
@@ -414,7 +423,7 @@ NVGpaint nvgBoxGradient(NVGcontext* ctx, float x, float y, float w, float h,
 NVGpaint nvgRadialGradient(NVGcontext* ctx, float cx, float cy, float inr, float outr,
 						   NVGcolor icol, NVGcolor ocol);
 
-// Creates and returns an image patter. Parameters (ox,oy) specify the left-top location of the image pattern,
+// Creates and returns an image pattern. Parameters (ox,oy) specify the left-top location of the image pattern,
 // (ex,ey) the size of one image, angle rotation around the top-left corner, image is handle to the image to render.
 // The gradient is transformed by the current transform when it is passed to nvgFillPaint() or nvgStrokePaint().
 NVGpaint nvgImagePattern(NVGcontext* ctx, float ox, float oy, float ex, float ey,
@@ -546,9 +555,15 @@ void nvgStroke(NVGcontext* ctx);
 // Returns handle to the font.
 int nvgCreateFont(NVGcontext* ctx, const char* name, const char* filename);
 
+// fontIndex specifies which font face to load from a .ttf/.ttc file.
+int nvgCreateFontAtIndex(NVGcontext* ctx, const char* name, const char* filename, const int fontIndex);
+
 // Creates font by loading it from the specified memory chunk.
 // Returns handle to the font.
 int nvgCreateFontMem(NVGcontext* ctx, const char* name, unsigned char* data, int ndata, int freeData);
+
+// fontIndex specifies which font face to load from a .ttf/.ttc file.
+int nvgCreateFontMemAtIndex(NVGcontext* ctx, const char* name, unsigned char* data, int ndata, int freeData, const int fontIndex);
 
 // Finds a loaded font of specified name, and returns handle to it, or -1 if the font is not found.
 int nvgFindFont(NVGcontext* ctx, const char* name);
@@ -559,11 +574,20 @@ int nvgAddFallbackFontId(NVGcontext* ctx, int baseFont, int fallbackFont);
 // Adds a fallback font by name.
 int nvgAddFallbackFont(NVGcontext* ctx, const char* baseFont, const char* fallbackFont);
 
+// Resets fallback fonts by handle.
+void nvgResetFallbackFontsId(NVGcontext* ctx, int baseFont);
+
+// Resets fallback fonts by name.
+void nvgResetFallbackFonts(NVGcontext* ctx, const char* baseFont);
+
 // Sets the font size of current text style.
 void nvgFontSize(NVGcontext* ctx, float size);
 
 // Sets the blur of current text style.
 void nvgFontBlur(NVGcontext* ctx, float blur);
+
+// Sets the dilation of current text style.
+void nvgFontDilate(NVGcontext* ctx, float dilate);
 
 // Sets the letter spacing of current text style.
 void nvgTextLetterSpacing(NVGcontext* ctx, float spacing);
@@ -582,11 +606,13 @@ void nvgFontFace(NVGcontext* ctx, const char* font);
 
 // Draws text string at specified location. If end is specified only the sub-string up to the end is drawn.
 float nvgText(NVGcontext* ctx, float x, float y, const char* string, const char* end);
+float nvgTextWithCursor(NVGcontext* ctx, float x, float y, const char* string, const char* end, int cursor);
 
 // Draws multi-line text string at specified location wrapped at the specified width. If end is specified only the sub-string up to the end is drawn.
-// White space is stripped at the beginning of the rows, the text is split at word boundaries or when new-line characters are encountered.
+// The text is split at word boundaries or when new-line characters are encountered.
 // Words longer than the max width are slit at nearest character (i.e. no hyphenation).
 void nvgTextBox(NVGcontext* ctx, float x, float y, float breakRowWidth, const char* string, const char* end);
+void nvgTextBoxWithCursor(NVGcontext* ctx, float x, float y, float breakRowWidth, const char* string, const char* end, int cursor);
 
 // Measures the specified text string. Parameter bounds should be a pointer to float[4],
 // if the bounding box of the text should be returned. The bounds value are [xmin,ymin, xmax,ymax]
@@ -608,9 +634,19 @@ int nvgTextGlyphPositions(NVGcontext* ctx, float x, float y, const char* string,
 void nvgTextMetrics(NVGcontext* ctx, float* ascender, float* descender, float* lineh);
 
 // Breaks the specified text into lines. If end is specified only the sub-string will be used.
-// White space is stripped at the beginning of the rows, the text is split at word boundaries or when new-line characters are encountered.
+// The text is split at word boundaries or when new-line characters are encountered.
 // Words longer than the max width are slit at nearest character (i.e. no hyphenation).
 int nvgTextBreakLines(NVGcontext* ctx, const char* string, const char* end, float breakRowWidth, NVGtextRow* rows, int maxRows);
+
+void nvgFontQuality(NVGcontext* ctx, float quality);
+
+// Work like nvgFill, but only supports drawing image with alpha channels.
+// The image is used to create a stencil buffer, which will be used for subsequent drawing operations,
+// and only the content corresponding to the non-transparent part of the stencil buffer will be displayed.
+void nvgStencil(NVGcontext* ctx);
+
+// Clear stencil buffer and disable stencil test.
+void nvgStencilClear(NVGcontext* ctx);
 
 //
 // Internal Render API
@@ -623,6 +659,7 @@ enum NVGtexture {
 struct NVGscissor {
 	float xform[6];
 	float extent[2];
+	int stencilFlag;
 };
 typedef struct NVGscissor NVGscissor;
 
@@ -658,7 +695,7 @@ struct NVGparams {
 	void (*renderFlush)(void* uptr);
 	void (*renderFill)(void* uptr, NVGpaint* paint, NVGcompositeOperationState compositeOperation, NVGscissor* scissor, float fringe, const float* bounds, const NVGpath* paths, int npaths);
 	void (*renderStroke)(void* uptr, NVGpaint* paint, NVGcompositeOperationState compositeOperation, NVGscissor* scissor, float fringe, float strokeWidth, const NVGpath* paths, int npaths);
-	void (*renderTriangles)(void* uptr, NVGpaint* paint, NVGcompositeOperationState compositeOperation, NVGscissor* scissor, const NVGvertex* verts, int nverts);
+	void (*renderTriangles)(void* uptr, NVGpaint* paint, NVGcompositeOperationState compositeOperation, NVGscissor* scissor, const NVGvertex* verts, int nverts, float fringe);
 	void (*renderDelete)(void* uptr);
 };
 typedef struct NVGparams NVGparams;

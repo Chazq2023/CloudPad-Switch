@@ -6,6 +6,7 @@
 #include <string>
 
 #include <borealis.hpp>
+#include <borealis/views/cells/cell_detail.hpp>
 
 #include "settings.h"
 
@@ -13,49 +14,36 @@
 // construction time and lists the results. Selecting a PSNOW (PS3/PS4) row
 // starts a real cloud stream; PS5 rows are catalog-browse only for now (see
 // cloudcatalog.h for why).
-class CloudGameList : public brls::List
+//
+// A ScrollingFrame so the row list can scroll (TabFrame gives each tab the
+// full content pane, no scrolling of its own). Refresh()/Search() rebuild
+// rowsBox in place rather than swapping in a whole new CloudGameList - the
+// old fork's BoxLayout::removeView was documented as unsafe to use at
+// runtime, which forced a SidebarItem-swap workaround; this fork's Box
+// (see settings_general_view.cpp's rebuildSubnetsUI in the reference
+// Borealis fork this was ported from) supports clearViews()+rebuild safely,
+// so that workaround is gone along with the root_frame/SidebarItem plumbing
+// it needed.
+class CloudGameList : public brls::ScrollingFrame
 {
 	public:
-		// platform must be "ps3", "ps4", or "ps5". root_frame is needed so the
-		// "Refresh catalog" row can swap in a freshly-fetched replacement for
-		// this tab (via SidebarItem::setAssociatedView + TabFrame::switchToView -
-		// the same path normal tab switching already uses - rather than
-		// mutating this list's own rows in place, which Borealis's
-		// BoxLayout::removeView warns isn't safe at runtime).
-		// force_refresh bypasses the on-disk catalog cache for this fetch.
-		// filter, when non-empty, only shows titles whose name contains it
-		// (case-insensitive) - see Search().
-		CloudGameList(Settings *settings, ChiakiLog *log, std::string platform,
-			brls::TabFrame *root_frame, bool force_refresh = false, std::string filter = "");
-
-		// Called once by whoever calls TabFrame::addTab, with the SidebarItem
-		// that came back for this tab - needed so Refresh() can retarget it at
-		// the replacement list it builds.
-		void SetSidebarItem(brls::SidebarItem *item);
-
-		// Application::handleAction gives Application::viewStack.back() (the
-		// pushed TabFrame itself) first refusal on every key, before it ever
-		// walks up from the focused view - so a Minus binding registered on
-		// this List's own instance (a TabFrame child, never topView) can
-		// never win against the TabFrame's own hidden FPS-toggle binding
-		// (registered on itself by Application::pushView). Route Minus
-		// through the TabFrame instead, only while this tab is the one
-		// actually showing - see willAppear/willDisappear.
-		void willAppear(bool resetState = false) override;
-		void willDisappear(bool resetState = false) override;
+		// platform must be "ps3", "ps4", or "ps5".
+		CloudGameList(Settings *settings, ChiakiLog *log, std::string platform);
 
 	private:
 		Settings *settings;
 		ChiakiLog *log;
 		std::string platform;
-		brls::TabFrame *root_frame;
-		brls::SidebarItem *sidebar_item = nullptr;
 		std::string filter;
+		brls::Box *rowsBox;
+		brls::DetailCell *status;
 
+		// force_refresh bypasses the on-disk catalog cache for this fetch.
+		void BuildRows(bool force_refresh);
 		void Refresh();
 		// Opens the system keyboard (bound to the Minus button) and, on
-		// submit, swaps in a freshly-filtered replacement list the same way
-		// Refresh() does.
+		// submit, rebuilds the row list filtered to titles whose name
+		// contains what was typed (case-insensitive).
 		void Search();
 };
 

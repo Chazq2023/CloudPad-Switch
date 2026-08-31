@@ -1,60 +1,78 @@
 /*
-    Borealis, a Nintendo Switch UI Library
-    Copyright (C) 2019  natinusala
-    Copyright (C) 2019  p-sam
+    Copyright 2019-2021 natinusala
+    Copyright 2019 p-sam
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+        http://www.apache.org/licenses/LICENSE-2.0
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
 */
 
 #pragma once
 
-#ifndef BOREALIS_RESOURCES
-#error BOREALIS_RESOURCES define missing
-#endif
-#define BOREALIS_ASSET(_str) BOREALIS_RESOURCES _str
+// Core
+#include <borealis/core/actions.hpp>
+#include <borealis/core/activity.hpp>
+#include <borealis/core/animation.hpp>
+#include <borealis/core/application.hpp>
+#include <borealis/core/assets.hpp>
+#include <borealis/core/audio.hpp>
+#include <borealis/core/bind.hpp>
+#include <borealis/core/box.hpp>
+#include <borealis/core/event.hpp>
+#include <borealis/core/font.hpp>
+#include <borealis/core/frame_context.hpp>
+#include <borealis/core/geometry.hpp>
+#include <borealis/core/gesture.hpp>
+#include <borealis/core/i18n.hpp>
+#include <borealis/core/input.hpp>
+#include <borealis/core/logger.hpp>
+#include <borealis/core/platform.hpp>
+#include <borealis/core/style.hpp>
+#include <borealis/core/task.hpp>
+#include <borealis/core/theme.hpp>
+#include <borealis/core/thread.hpp>
+#include <borealis/core/time.hpp>
+#include <borealis/core/timer.hpp>
+#include <borealis/core/video.hpp>
+#include <borealis/core/view.hpp>
 
-// Library
-#include <borealis/absolute_layout.hpp>
-#include <borealis/animations.hpp>
-#include <borealis/applet_frame.hpp>
-#include <borealis/application.hpp>
-#include <borealis/background.hpp>
-#include <borealis/box_layout.hpp>
-#include <borealis/button.hpp>
-#include <borealis/crash_frame.hpp>
-#include <borealis/dialog.hpp>
-#include <borealis/dropdown.hpp>
-#include <borealis/event.hpp>
-#include <borealis/header.hpp>
-#include <borealis/i18n.hpp>
-#include <borealis/image.hpp>
-#include <borealis/label.hpp>
-#include <borealis/layer_view.hpp>
-#include <borealis/list.hpp>
-#include <borealis/logger.hpp>
-#include <borealis/material_icon.hpp>
-#include <borealis/notification_manager.hpp>
-#include <borealis/popup_frame.hpp>
-#include <borealis/progress_display.hpp>
-#include <borealis/progress_spinner.hpp>
-#include <borealis/rectangle.hpp>
-#include <borealis/repeating_task.hpp>
-#include <borealis/sidebar.hpp>
-#include <borealis/staged_applet_frame.hpp>
-#include <borealis/style.hpp>
-#include <borealis/tab_frame.hpp>
-#include <borealis/table.hpp>
-#include <borealis/theme.hpp>
-#include <borealis/thumbnail_frame.hpp>
-#include <borealis/view.hpp>
+// Views
+#include <borealis/views/applet_frame.hpp>
+#include <borealis/views/button.hpp>
+#include <borealis/views/dialog.hpp>
+#include <borealis/views/dropdown.hpp>
+#include <borealis/views/header.hpp>
+#include <borealis/views/image.hpp>
+#include <borealis/views/label.hpp>
+#include <borealis/views/progress_spinner.hpp>
+#include <borealis/views/rectangle.hpp>
+#include <borealis/views/recycler.hpp>
+#include <borealis/views/scrolling_frame.hpp>
+#include <borealis/views/h_scrolling_frame.hpp>
+#include <borealis/views/sidebar.hpp>
+#include <borealis/views/slider.hpp>
+#include <borealis/views/tab_frame.hpp>
+
+// Widgets
+#include <borealis/views/widgets/battery.hpp>
+#include <borealis/views/widgets/wireless.hpp>
+
+// Cells
+#include <borealis/views/cells/cell_bool.hpp>
+#include <borealis/views/cells/cell_input.hpp>
+#include <borealis/views/cells/cell_radio.hpp>
+#include <borealis/views/cells/cell_selector.hpp>
+#include <borealis/views/cells/cell_slider.hpp>
+
+// Gestures
+#include <borealis/core/touch/pan_gesture.hpp>
+#include <borealis/core/touch/scroll_gesture.hpp>
+#include <borealis/core/touch/tap_gesture.hpp>
