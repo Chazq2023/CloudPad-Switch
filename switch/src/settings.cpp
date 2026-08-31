@@ -463,10 +463,14 @@ ChiakiVideoResolutionPreset Settings::GetVideoResolution(Host *host)
 
 void Settings::SetVideoResolution(Host *host, ChiakiVideoResolutionPreset value)
 {
+	// CloudPad Switch now exposes a single supported resolution. Clamp old
+	// chiaki.conf values (including saved 720p selections) to 1080p as they
+	// are loaded so removing the selector also changes existing installs.
+	(void)value;
 	if(host == nullptr)
-		this->global_video_resolution = value;
+		this->global_video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 	else
-		host->video_resolution = value;
+		host->video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 }
 
 void Settings::SetVideoResolution(Host *host, std::string value)

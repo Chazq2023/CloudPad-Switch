@@ -642,6 +642,7 @@ bool IO::FreeVideo()
 			}
 		}
 		free(this->frames); // allocted via malloc
+		this->frames = nullptr;
 	}
 
 	if(this->tmp_frame)
@@ -652,6 +653,10 @@ bool IO::FreeVideo()
 	{
 		avcodec_free_context(&this->codec_context);
 	}
+
+	this->isFirst = true;
+	current_frame = 0;
+	next_frame = 0;
 
 	return ret;
 }
@@ -1393,6 +1398,8 @@ inline void IO::SetOpenGlNV12Pixels(AVFrame *frame)
 		D(glBindTexture(GL_TEXTURE_2D, tex[i]));
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, real_width);
 		if (isFirst) {
+			CHIAKI_LOGI(this->log, "[NV12 PROBE] plane=%d frame->width=%d frame->height=%d frame->linesize=%d real_width=%d tex_width=%d tex_height=%d video_width=%d video_height=%d screen_width=%d screen_height=%d",
+				i, frame->width, frame->height, frame->linesize[i], real_width, width, height, this->video_width, this->video_height, this->screen_width, this->screen_height);
 			D(glTexImage2D(GL_TEXTURE_2D, 0, planes[i][3], width, height, 0, planes[i][4], GL_UNSIGNED_BYTE, frame->data[i]));
 		} else {
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width,
@@ -1523,6 +1530,15 @@ void IO::UpdateControllerState(ChiakiControllerState *state, std::map<uint32_t, 
 {
 #ifdef __SWITCH__
 	padUpdate(&this->pad);
+	// ZL+ZR+Plus: exit the stream cleanly back to the app's own main menu,
+	// without needing to wait for a server-side disconnect. Held-together
+	// combo (not a single button) so it can't be triggered accidentally
+	// during normal play.
+	{
+		u64 held = padGetButtons(&this->pad);
+		if((held & HidNpadButton_ZL) && (held & HidNpadButton_ZR) && (held & HidNpadButton_Plus))
+			this->exit_stream_requested.store(true);
+	}
 #endif
 	// handle SDL events
 	while(SDL_PollEvent(&this->sdl_event))

@@ -132,11 +132,14 @@ install(TARGETS chiaki-borealis
 	BUNDLE DESTINATION bin)
 
 if(CHIAKI_IS_SWITCH)
+	# Version shown by hbmenu. Release builds can keep this aligned with their
+	# release notes by passing -DCLOUDPAD_SWITCH_VERSION=<release version>.
+	set(CLOUDPAD_SWITCH_VERSION "alpha 0.0.1" CACHE STRING "CloudPad Switch release version")
 	add_nro_target(chiaki
 		chiaki-borealis
-		"Chiaki-ng"
-		"StreetPea, kkWong, xlanor, H0neyBadger and thestr4ng3r"
-		"${CHIAKI_VERSION}"
-		"${CMAKE_CURRENT_SOURCE_DIR}/nro_icon.jpg"
+		"CloudPad"
+		"Chazq"
+		"${CLOUDPAD_SWITCH_VERSION}"
+		"${CMAKE_CURRENT_SOURCE_DIR}/cloudpad-icon.jpg"
 		"${CMAKE_CURRENT_SOURCE_DIR}/res")
 endif()

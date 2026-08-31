@@ -31,7 +31,7 @@ class Host
 		ChiakiLog *log = nullptr;
 		Settings *settings = nullptr;
 		//video config
-		ChiakiVideoResolutionPreset video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_720p;
+		ChiakiVideoResolutionPreset video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 		ChiakiVideoFPSPreset video_fps = CHIAKI_VIDEO_FPS_PRESET_60;
 		int haptic = 0; 
 		std::string host_type;

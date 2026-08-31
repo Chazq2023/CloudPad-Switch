@@ -35,6 +35,7 @@ Reproducible: False
 #endif
 
 #include <mutex>
+#include <atomic>
 #include <map>
 #include <deque>
 #include <thread>
@@ -76,10 +77,10 @@ class IO
 		int screen_width = 1280;
 		int screen_height = 720;
 		const AVCodec *codec;
-		AVCodecContext *codec_context;
-		AVFrame **frames;
+		AVCodecContext *codec_context = nullptr;
+		AVFrame **frames = nullptr;
 		uintptr_t origin_ptr[MAX_FRAME_COUNT][MAX_NV12_PLANE_COUNT];
-		AVFrame *tmp_frame;
+		AVFrame *tmp_frame = nullptr;
 		SDL_AudioDeviceID sdl_audio_device_id = 0;
 		SDL_Event sdl_event;
 		SDL_Joystick *sdl_joystick_ptr[SDL_JOYSTICK_COUNT] = {0};
@@ -189,6 +190,12 @@ class IO
 
 		~IO();
 		bool isFirst = true;
+		// Set by UpdateControllerState when ZL+ZR+Plus are all held, so the
+		// active PSRemotePlay view can cleanly tear down the stream and
+		// return to the app's own main menu. Checked and reset by whoever
+		// owns the session (PSRemotePlay::draw), not acted on here since IO
+		// has no view/session handles of its own.
+		std::atomic<bool> exit_stream_requested{false};
 		void SetMesaConfig();
 		bool VideoCB(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered, void *user);
 		void InitAudioCB(unsigned int channels, unsigned int rate);

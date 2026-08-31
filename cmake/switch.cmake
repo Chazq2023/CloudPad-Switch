@@ -41,6 +41,7 @@ function(__add_nacp target APP_TITLE APP_AUTHOR APP_VERSION)
 	add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${target}
 		COMMAND ${__NACP_COMMAND}
 		WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
 		VERBATIM
 		)
 endfunction()

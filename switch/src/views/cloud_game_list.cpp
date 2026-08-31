@@ -34,19 +34,28 @@ namespace
 	{
 		IO *io = IO::GetInstance();
 
-		host->SetEventQuitCallback([host](ChiakiQuitEvent *quit) {
-			brls::Application::unblockInputs();
-			brls::Application::setMaximumFPS(60);
-			brls::Application::notify(chiaki_quit_reason_string(quit->reason));
-			brls::Application::popView();
-			host->StopSession();
-			host->FiniSession();
+		host->SetEventQuitCallback([io](ChiakiQuitEvent *quit) {
+			// Chiaki invokes this callback on its session worker thread. Joining
+			// or manipulating Borealis views here can self-join the worker and
+			// race the UI thread. Let PSRemotePlay::draw perform all teardown on
+			// the main thread instead.
+			(void)quit;
+			io->exit_stream_requested.store(true);
 		});
 		host->SetEventRumbleCallback(std::bind(&IO::SetRumble, io, std::placeholders::_1, std::placeholders::_2));
 		host->SetReadControllerCallback(std::bind(&IO::UpdateControllerState, io, std::placeholders::_1, std::placeholders::_2));
 		host->SetEventConnectedCallback([host]() {
 			brls::Application::setMaximumFPS(0);
-			brls::Application::pushView(new PSRemotePlay(host));
+			PSRemotePlay *stream_view = new PSRemotePlay(host);
+			brls::Application::pushView(stream_view);
+			// pushView automatically binds Plus to Application::quit(). That
+			// makes ZL+ZR+Plus close the entire NRO before UpdateControllerState
+			// can turn it into a stream-exit request. Consume Borealis's Plus
+			// action on this view only; IO still forwards Plus to the remote
+			// controller state, and handles the full combo during draw.
+			stream_view->registerAction("", brls::Key::PLUS, []() {
+				return true;
+			}, true);
 		});
 
 		try
@@ -102,6 +111,10 @@ namespace
 		// ownership simplicity local Host objects already have (they live in
 		// Settings::hosts for the rest of the process too).
 		Host *host = new Host("Cloud: " + game.name);
+		// Copy the global settings explicitly so cloud hosts remain aligned
+		// with the requested server profile if the Host defaults ever change.
+		settings->SetVideoResolution(host, settings->GetVideoResolution(nullptr));
+		settings->SetVideoFPS(host, settings->GetVideoFPS(nullptr));
 		host->SetCloudConnectInfo(CHIAKI_SERVICE_TYPE_PSNOW, kamaji_result.platform,
 			gaikai_result.server_ip, gaikai_result.server_port, gaikai_result.launch_spec,
 			gaikai_result.handshake_key, gaikai_result.session_id, gaikai_result.psn_wrapper_type,
@@ -142,6 +155,9 @@ namespace
 		}
 
 		Host *host = new Host("Cloud: " + game.name);
+		// Keep the client decoder and requested cloud profile in sync.
+		settings->SetVideoResolution(host, settings->GetVideoResolution(nullptr));
+		settings->SetVideoFPS(host, settings->GetVideoFPS(nullptr));
 		host->SetCloudConnectInfo(CHIAKI_SERVICE_TYPE_PSCLOUD, "ps5",
 			gaikai_result.server_ip, gaikai_result.server_port, gaikai_result.launch_spec,
 			gaikai_result.handshake_key, gaikai_result.session_id, gaikai_result.psn_wrapper_type,

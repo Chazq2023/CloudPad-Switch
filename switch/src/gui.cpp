@@ -31,7 +31,7 @@ bool MainApplication::Load()
 	brls::Logger::setLogLevel(brls::LogLevel::DEBUG);
 
 	brls::i18n::loadTranslations();
-	if(!brls::Application::init("pylux"))
+	if(!brls::Application::init("CloudPad"))
 	{
 		brls::Logger::error("Unable to init Borealis application");
 		return false;
@@ -52,8 +52,8 @@ bool MainApplication::Load()
 
 	// Create a view
 	this->rootFrame = new brls::TabFrame();
-	this->rootFrame->setTitle("pylux");
-	this->rootFrame->setIcon(BOREALIS_ASSET("icon.png"));
+	this->rootFrame->setTitle("CloudPad");
+	this->rootFrame->setIcon(BOREALIS_ASSET("cloudpad-icon.png"));
 
 	brls::List *account = new brls::List();
 	BuildAccountMenu(account);
@@ -113,30 +113,6 @@ void MainApplication::BuildAccountMenu(brls::List *ls)
 	ls->addView(stream_info);
 
 	int value;
-	// Only 720p and 1080p are offered - 540p/360p aren't useful for cloud
-	// streaming and dropping them also removes the resolution/bitrate spec
-	// mismatch CloudGaikai used to have for them (see its BuildRequestGameSpec).
-	// Selecting either one now genuinely renders at that resolution end to
-	// end: chiaki_connect_video_profile_preset (lib/src/session.c) already
-	// mapped 1080p to a real 1920x1080 client decode profile, and
-	// CloudGaikai's request spec now matches it exactly instead of defaulting
-	// everything but 720p to 1080p.
-	ChiakiVideoResolutionPreset resolution_preset = this->settings->GetVideoResolution(nullptr);
-	value = (resolution_preset == CHIAKI_VIDEO_RESOLUTION_PRESET_720p) ? 1 : 0;
-
-	brls::SelectListItem *resolution = new brls::SelectListItem(
-		"Resolution", { "1080p", "720p" }, value);
-
-	auto resolution_cb = [this](int result) {
-		ChiakiVideoResolutionPreset value = result == 1
-			? CHIAKI_VIDEO_RESOLUTION_PRESET_720p
-			: CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
-		this->settings->SetVideoResolution(nullptr, value);
-		this->settings->WriteFile();
-	};
-	resolution->getValueSelectedEvent()->subscribe(resolution_cb);
-	ls->addView(resolution);
-
 	ChiakiVideoFPSPreset fps_preset = this->settings->GetVideoFPS(nullptr);
 	switch(fps_preset)
 	{
@@ -292,4 +268,3 @@ void MainApplication::SignOut()
 	this->RefreshLoginStatus();
 	brls::Application::notify("Signed out");
 }
-

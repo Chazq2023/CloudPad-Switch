@@ -226,9 +226,9 @@ void CloudGaikai::BuildRequestGameSpec()
 	json_object_object_add(spec, "cloudEndpoint", json_object_new_string("https://cc.prod.gaikai.com"));
 	json_object_object_add(spec, "redirectUri", json_object_new_string(redirect_uri.c_str()));
 
-	// Settings only ever offers 720p or 1080p (see gui.cpp's BuildAccountMenu) -
-	// anything else defaults to 1080p rather than silently mismatching what
-	// chiaki_connect_video_profile_preset set up for the client-side decoder.
+	// The Switch frontend currently fixes cloud streaming at 1080p. Keep the
+	// fallback here for legacy callers without allowing a request/decoder
+	// resolution mismatch.
 	std::string resolution_setting;
 	int client_width, client_height;
 	switch(resolution_height)
