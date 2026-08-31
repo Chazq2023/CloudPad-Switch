@@ -79,7 +79,6 @@ Host *Settings::GetOrCreateHost(std::string *host_name)
 		this->SetPSNAccountID(host, this->global_psn_account_id);
 		this->SetVideoResolution(host, this->global_video_resolution);
 		this->SetVideoFPS(host, this->global_video_fps);
-		this->SetHaptic(host, this->global_haptic);
 	}
 	return host;
 }
@@ -156,9 +155,6 @@ void Settings::ParseFile()
 				case VIDEO_FPS:
 					this->SetVideoFPS(current_host, value);
 					break;
-				case HAPTIC:
-					this->SetHaptic(current_host, value);
-					break;
 				case TARGET:
 					CHIAKI_LOGV(&this->log, "TARGET %s", value.c_str());
 					if(current_host != nullptr)
@@ -179,8 +175,17 @@ void Settings::ParseFile()
 				case DUID:
 					this->global_duid = value;
 					break;
-				case CUSTOM_BITRATE_KBPS:
-					this->SetCustomBitrateKbps(value);
+				case PS5_LIBRARY_RESOLUTION:
+					this->SetPs5LibraryResolution(value);
+					break;
+				case PS34_CATALOG_RESOLUTION:
+					this->SetPs34CatalogResolution(value);
+					break;
+				case PS5_LIBRARY_BITRATE_KBPS:
+					this->SetPs5LibraryBitrateKbps(value);
+					break;
+				case PS34_CATALOG_BITRATE_KBPS:
+					this->SetPs34CatalogBitrateKbps(value);
 					break;
 				case SHARPEN_LEVEL:
 					this->SetSharpenLevel(value);
@@ -188,6 +193,17 @@ void Settings::ParseFile()
 				case VIDEO_PACING_SMOOTH:
 					this->SetVideoPacingSmooth(value);
 					break;
+				case TITLE_STREAMABLE:
+				{
+					size_t sep = value.find_last_of('|');
+					if(sep != std::string::npos)
+					{
+						std::string product_id = value.substr(0, sep);
+						int state = std::atoi(value.substr(sep + 1).c_str());
+						this->title_streamable[product_id] = static_cast<StreamableState>(state);
+					}
+					break;
+				}
 			} // ci switch
 			if(rp_key_b && rp_regist_key_b && rp_key_type_b)
 				// the current host contains rp key data
@@ -223,10 +239,6 @@ int Settings::WriteFile()
 						<< this->FPSPresetToString(this->GetVideoFPS(nullptr))
 						<< "\n";
 
-		if(this->global_haptic)
-			config_file << "haptic = "
-						<< std::to_string(this->GetHaptic(nullptr))
-						<< "\n";
 		if(this->global_psn_online_id.length())
 			config_file << "psn_online_id = \"" << this->global_psn_online_id << "\"\n";
 
@@ -248,13 +260,27 @@ int Settings::WriteFile()
 		if(this->global_duid.length())
 			config_file << "duid = \"" << this->global_duid << "\"\n";
 
-		if(this->global_custom_bitrate_kbps)
-			config_file << "custom_bitrate_kbps = " << std::to_string(this->global_custom_bitrate_kbps) << "\n";
+		config_file << "ps5_library_resolution = \""
+					<< this->ResolutionPresetToString(this->global_ps5_library_resolution)
+					<< "\"\n";
+		config_file << "ps34_catalog_resolution = \""
+					<< this->ResolutionPresetToString(this->global_ps34_catalog_resolution)
+					<< "\"\n";
+
+		if(this->global_ps5_library_bitrate_kbps)
+			config_file << "ps5_library_bitrate_kbps = " << std::to_string(this->global_ps5_library_bitrate_kbps) << "\n";
+
+		if(this->global_ps34_catalog_bitrate_kbps)
+			config_file << "ps34_catalog_bitrate_kbps = " << std::to_string(this->global_ps34_catalog_bitrate_kbps) << "\n";
 
 		if(this->global_sharpen_level)
 			config_file << "sharpen_level = " << std::to_string(this->global_sharpen_level) << "\n";
 
 		config_file << "video_pacing_smooth = " << (this->global_video_pacing_smooth ? "1" : "0") << "\n";
+
+		for(auto it = this->title_streamable.begin(); it != this->title_streamable.end(); it++)
+			config_file << "title_streamable = \"" << it->first << "|"
+						<< static_cast<int>(it->second) << "\"\n";
 
 		// write host config in file
 		// loop over all configured
@@ -293,9 +319,6 @@ int Settings::WriteFile()
 							<< "rp_regist_key = \"" << this->GetHostRPRegistKey(&it->second) << "\"\n"
 							<< "rp_key_type = " << rp_key_type << "\n";
 			}
-			config_file << "haptic = "
-						<< std::to_string(this->GetHaptic(&it->second))
-						<< "\n";
 
 			config_file << "\n";
 		} // for host
@@ -497,35 +520,6 @@ void Settings::SetVideoFPS(Host *host, ChiakiVideoFPSPreset value)
 	else
 		host->video_fps = CHIAKI_VIDEO_FPS_PRESET_60;
 }
-HapticPreset Settings::GetHaptic(Host *host)
-{
-	if(host == nullptr) return this->global_haptic;
-	if (host->haptic == 0) {
-		return HAPTIC_PRESET_DIABLED;
-	} else if (host->haptic == 1) {
-		return HAPTIC_PRESET_WEAK;
-	}
-	return HAPTIC_PRESET_STRONG;
-}
-
-void Settings::SetHaptic(Host *host, HapticPreset value)
-{
-	if(host == nullptr)
-		this->global_haptic = value;
-	else
-		host->haptic = value;
-}
-void Settings::SetHaptic(Host *host, std::string value)
-{
-	HapticPreset result = HAPTIC_PRESET_DIABLED;
-	if (value == "1") {
-		result = HAPTIC_PRESET_WEAK;
-	} else if (value == "2") {
-		result = HAPTIC_PRESET_STRONG;
-	}
-	SetHaptic(host, result);
-}
-
 void Settings::SetVideoFPS(Host *host, std::string value)
 {
 	ChiakiVideoFPSPreset p = StringToFPSPreset(value);
@@ -742,19 +736,68 @@ void Settings::ClearCloudLogin()
 	// keep global_duid: it identifies this device, not this login session
 }
 
-int Settings::GetCustomBitrateKbps()
+ChiakiVideoResolutionPreset Settings::GetPs5LibraryResolution()
 {
-	return this->global_custom_bitrate_kbps;
+	return this->global_ps5_library_resolution;
 }
 
-void Settings::SetCustomBitrateKbps(int kbps)
+void Settings::SetPs5LibraryResolution(ChiakiVideoResolutionPreset value)
 {
-	this->global_custom_bitrate_kbps = kbps > 0 ? kbps : 0;
+	this->global_ps5_library_resolution = value == CHIAKI_VIDEO_RESOLUTION_PRESET_720p
+		? CHIAKI_VIDEO_RESOLUTION_PRESET_720p
+		: CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 }
 
-void Settings::SetCustomBitrateKbps(std::string kbps)
+void Settings::SetPs5LibraryResolution(std::string value)
 {
-	this->SetCustomBitrateKbps(std::atoi(kbps.c_str()));
+	this->SetPs5LibraryResolution(this->StringToResolutionPreset(value));
+}
+
+ChiakiVideoResolutionPreset Settings::GetPs34CatalogResolution()
+{
+	return this->global_ps34_catalog_resolution;
+}
+
+void Settings::SetPs34CatalogResolution(ChiakiVideoResolutionPreset value)
+{
+	this->global_ps34_catalog_resolution = value == CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+		? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+		: CHIAKI_VIDEO_RESOLUTION_PRESET_720p;
+}
+
+void Settings::SetPs34CatalogResolution(std::string value)
+{
+	this->SetPs34CatalogResolution(this->StringToResolutionPreset(value));
+}
+
+int Settings::GetPs5LibraryBitrateKbps()
+{
+	return this->global_ps5_library_bitrate_kbps;
+}
+
+void Settings::SetPs5LibraryBitrateKbps(int kbps)
+{
+	this->global_ps5_library_bitrate_kbps = kbps > 0 ? kbps : 0;
+}
+
+void Settings::SetPs5LibraryBitrateKbps(std::string kbps)
+{
+	this->SetPs5LibraryBitrateKbps(std::atoi(kbps.c_str()));
+}
+
+int Settings::GetPs34CatalogBitrateKbps()
+{
+	return this->global_ps34_catalog_bitrate_kbps;
+}
+
+void Settings::SetPs34CatalogBitrateKbps(int kbps)
+{
+	this->global_ps34_catalog_bitrate_kbps = kbps > 0 ? kbps : 0;
+}
+
+void Settings::SetPs34CatalogBitrateKbps(std::string kbps)
+{
+	this->SetPs34CatalogBitrateKbps(std::atoi(kbps.c_str()));
 }
 
 int Settings::GetSharpenLevel()
@@ -789,6 +832,19 @@ void Settings::SetVideoPacingSmooth(bool smooth)
 void Settings::SetVideoPacingSmooth(std::string value)
 {
 	this->SetVideoPacingSmooth(value == "1");
+}
+
+StreamableState Settings::GetTitleStreamable(std::string product_id)
+{
+	auto it = this->title_streamable.find(product_id);
+	if(it == this->title_streamable.end())
+		return StreamableState::Unknown;
+	return it->second;
+}
+
+void Settings::SetTitleStreamable(std::string product_id, StreamableState state)
+{
+	this->title_streamable[product_id] = state;
 }
 
 #ifdef CHIAKI_ENABLE_SWITCH_OVERCLOCK

@@ -29,6 +29,8 @@ class MainApplication
 		IO *io;
 		brls::TabFrame *rootFrame;
 		brls::ListItem *cloud_login_status = nullptr;
+		brls::ListItem *sign_in_item = nullptr;
+		brls::ListItem *sign_out_item = nullptr;
 
 		void BuildAccountMenu(brls::List *);
 		void SignIn();

@@ -4,3 +4,4 @@ build_switch/
 *.nacp
 *.elf
 .idea/
+.DS_Store
