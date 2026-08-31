@@ -33,6 +33,17 @@ class CloudGameList : public brls::List
 		// the replacement list it builds.
 		void SetSidebarItem(brls::SidebarItem *item);
 
+		// Application::handleAction gives Application::viewStack.back() (the
+		// pushed TabFrame itself) first refusal on every key, before it ever
+		// walks up from the focused view - so a Minus binding registered on
+		// this List's own instance (a TabFrame child, never topView) can
+		// never win against the TabFrame's own hidden FPS-toggle binding
+		// (registered on itself by Application::pushView). Route Minus
+		// through the TabFrame instead, only while this tab is the one
+		// actually showing - see willAppear/willDisappear.
+		void willAppear(bool resetState = false) override;
+		void willDisappear(bool resetState = false) override;
+
 	private:
 		Settings *settings;
 		ChiakiLog *log;

@@ -25,6 +25,17 @@ struct CloudGame
 	std::string image_url;
 	std::string platform;     // "ps3", "ps4", or "ps5"
 	std::string service_type; // "psnow" or "pscloud"
+	// PSCLOUD (PS5) only: true if this title matched an entry in the public
+	// PS5 cloud catalog (which FetchPs5CloudCatalog already filters down to
+	// streamingSupported==true titles) during FetchOwnedPs5CloudGames's
+	// box-art cross-reference. A positive-only hint - it never marks a title
+	// unstreamable, only possibly streamable - used as the initial guess for
+	// a title's streamable badge until a real stream attempt confirms one
+	// way or the other (see Settings::GetTitleStreamable/SetTitleStreamable
+	// and CloudPad Android's CloudGame.kt / PsCloudOwnership.kt, which this
+	// mirrors). Always false for PSNOW games, which have no equivalent
+	// public-catalog signal to guess from.
+	bool catalog_streamable = false;
 };
 
 // Ports the catalog-fetch half of the upstream CloudCatalogBackend

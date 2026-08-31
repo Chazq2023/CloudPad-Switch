@@ -10,6 +10,7 @@
 #include <ctime>
 #include <fstream>
 #include <map>
+#include <regex>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -418,6 +419,9 @@ namespace
 			game.image_url = JsonGetString(g, "image_url");
 			game.platform = JsonGetString(g, "platform");
 			game.service_type = JsonGetString(g, "service_type");
+			json_object *catalog_streamable_obj = nullptr;
+			game.catalog_streamable = json_object_object_get_ex(g, "catalog_streamable", &catalog_streamable_obj)
+				&& json_object_get_boolean(catalog_streamable_obj);
 			out_games->push_back(game);
 		}
 
@@ -440,6 +444,7 @@ namespace
 			json_object_object_add(g, "image_url", json_object_new_string(game.image_url.c_str()));
 			json_object_object_add(g, "platform", json_object_new_string(game.platform.c_str()));
 			json_object_object_add(g, "service_type", json_object_new_string(game.service_type.c_str()));
+			json_object_object_add(g, "catalog_streamable", json_object_new_boolean(game.catalog_streamable));
 			json_object_array_add(games_arr, g);
 		}
 		json_object_object_add(root, "games", games_arr);
@@ -449,6 +454,50 @@ namespace
 			file << json_object_to_json_string(root);
 
 		json_object_put(root);
+	}
+
+	// Reduces various PS5 product-id formats to a comparable "stable key" so
+	// an owned entitlement's product id (e.g. "PPSA01147_00") matches the
+	// public catalog's differently-formatted id for the same title (e.g.
+	// "EP9000-PPSA01147_00-SUFFIX" - both reduce to "PPSA01147"). Plain
+	// product_id/entitlement_id equality alone matches almost nothing
+	// between these two id spaces; mirrors CloudPad Android's
+	// PsCloudOwnership.productIdStableKey exactly (including the multi-token
+	// fallback for ids with no PPSA/CUSA number), since that's the actual
+	// signal upstream's own streamability cross-reference relies on.
+	std::string ProductIdStableKey(const std::string &product_id)
+	{
+		if(product_id.empty())
+			return "";
+
+		static const std::regex title_id_re("(PPSA|CUSA)[0-9]+");
+		std::smatch m;
+		if(std::regex_search(product_id, m, title_id_re))
+			return m[0];
+
+		std::vector<std::string> tokens;
+		std::stringstream dash_stream(product_id);
+		std::string dash_part;
+		while(std::getline(dash_stream, dash_part, '-'))
+		{
+			std::stringstream underscore_stream(dash_part);
+			std::string token;
+			while(std::getline(underscore_stream, token, '_'))
+				if(!token.empty())
+					tokens.push_back(token);
+		}
+		if(tokens.size() < 2)
+			return "";
+
+		tokens.pop_back();
+		std::string key;
+		for(size_t i = 0; i < tokens.size(); i++)
+		{
+			if(i > 0)
+				key += "|";
+			key += tokens[i];
+		}
+		return key;
 	}
 }
 
@@ -958,20 +1007,57 @@ bool CloudCatalog::FetchOwnedPs5CloudGames(const std::string &npsso, const std::
 	// Never required for a game to count as owned or to stream - if this
 	// fetch fails or a title has no catalog match, it just keeps its
 	// entitlement icon - matches upstream's enrichWithCatalogArt intent.
+	//
+	// The same cross-reference also seeds catalog_streamable: FetchPs5CloudCatalog
+	// already filters its results to streamingSupported==true titles, so a
+	// match here is upstream's own applyStreamabilityHints signal (matched
+	// against the public catalog => STREAMABLE guess) - see CloudGame above.
 	std::vector<CloudGame> catalog;
 	std::string catalog_error;
 	if(FetchPs5CloudCatalog(locale, &catalog, &catalog_error, force_refresh))
 	{
+		// Owned entitlement product ids (e.g. "PPSA01147_00") and the public
+		// imagic catalog's ids for the same title (e.g.
+		// "EP9000-PPSA01147_00-SUFFIX") are formatted differently - plain
+		// equality below only ever catches a handful of titles, so a stable
+		// key index is the primary match path, with plain equality kept as a
+		// cheap first try.
+		std::map<std::string, const CloudGame *> catalog_by_stable_key;
+		for(const auto &c : catalog)
+		{
+			std::string key = ProductIdStableKey(c.product_id);
+			if(!key.empty() && catalog_by_stable_key.find(key) == catalog_by_stable_key.end())
+				catalog_by_stable_key[key] = &c;
+		}
+
 		for(auto &game : games)
 		{
+			const CloudGame *match = nullptr;
 			for(const auto &c : catalog)
 			{
 				if(c.product_id == game.product_id || c.product_id == game.entitlement_id)
 				{
-					if(!c.image_url.empty())
-						game.image_url = c.image_url;
+					match = &c;
 					break;
 				}
+			}
+			if(!match)
+			{
+				std::string key = ProductIdStableKey(game.product_id);
+				if(key.empty())
+					key = ProductIdStableKey(game.entitlement_id);
+				if(!key.empty())
+				{
+					auto it = catalog_by_stable_key.find(key);
+					if(it != catalog_by_stable_key.end())
+						match = it->second;
+				}
+			}
+			if(match)
+			{
+				if(!match->image_url.empty())
+					game.image_url = match->image_url;
+				game.catalog_streamable = true;
 			}
 		}
 	}
