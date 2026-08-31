@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
+
+#ifndef CHIAKI_SENKUSHA_H
+#define CHIAKI_SENKUSHA_H
+
+#include "takion.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct chiaki_session_t ChiakiSession;
+
+typedef struct senkusha_t
+{
+	ChiakiSession *session;
+	ChiakiLog *log;
+	ChiakiTakion takion;
+
+	int state;
+	bool state_finished;
+	bool state_failed;
+	bool should_stop;
+	ChiakiSeqNum32 data_ack_seq_num_expected;
+	uint64_t pong_time_us;
+	uint16_t ping_test_index;
+	uint16_t ping_index;
+	uint32_t ping_tag;
+	uint32_t mtu_id;
+	int protocol_version; // Protocol version to use (7 for Remote Play, 9/12 for Cloud)
+	char *cloud_launch_spec; // For cloud mode: session key (x-gaikai-session) to use in BIG message launch_spec
+	bool skip_mtu_test; // If true, chiaki_senkusha_run only measures RTT and skips the MTU in/out sub-tests entirely
+
+	size_t sent_big_size;           // size of the protobuf BIG we sent (for echo buffer sizing)
+	uint8_t *echo_reassembly_buf;   // accumulates echoed BANG fragments from server
+	size_t echo_reassembly_pos;
+
+	/**
+	 * signaled on change of state_finished or should_stop
+	 */
+	ChiakiCond state_cond;
+
+	/**
+	 * protects state, state_finished, state_failed and should_stop
+	 */
+	ChiakiMutex state_mutex;
+} ChiakiSenkusha;
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_init(ChiakiSenkusha *senkusha, ChiakiSession *session);
+CHIAKI_EXPORT void chiaki_senkusha_fini(ChiakiSenkusha *senkusha);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint32_t *mtu_in, uint32_t *mtu_out, uint64_t *rtt_us, chiaki_socket_t *sock);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // CHIAKI_SENKUSHA_H

@@ -1,0 +1,595 @@
+// SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
+
+#define _GNU_SOURCE
+
+#include <chiaki/thread.h>
+#include <chiaki/time.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
+
+#if _WIN32
+static DWORD WINAPI win32_thread_func(LPVOID param)
+{
+	ChiakiThread *thread = (ChiakiThread *)param;
+	thread->ret = thread->func(thread->arg);
+	return 0;
+}
+#endif
+
+#ifdef __SWITCH__
+// Horizon OS priority: 0x00 (highest) to 0x3F (lowest); 0x2C is libnx's
+// default (shared with Borealis's main/render thread), 0x3B+ is the special
+// preemptive-multithreading band. A modest step above default, still well
+// below that band, so chiaki worker threads reliably preempt UI/render work
+// during a burst without changing the scheduling model itself.
+#define CHIAKI_SWITCH_THREAD_PRIORITY 0x2A
+
+typedef struct switch_thread_trampoline_args_t
+{
+	ChiakiThreadFunc func;
+	void *arg;
+} SwitchThreadTrampolineArgs;
+
+// pthread_attr_setschedparam(), tried previously, compiles and links fine
+// but is a complete no-op on this toolchain's pthread implementation
+// (devkitA64's libsysbase pthread.o): disassembly confirms pthread_create()
+// only ever reads the stack addr/size fields out of pthread_attr_t when
+// handing off to the underlying __syscall_thread_create - the schedparam
+// priority field is written by pthread_attr_setschedparam() and then never
+// read by anything. So instead of trying to set priority at creation time
+// via attr, each thread sets its own priority as the very first thing it
+// does, using the real Horizon syscall directly on itself via the
+// documented threadGetCurHandle() - this works regardless of whether the
+// thread was created via pthread or libnx's own Thread API.
+static void *switch_thread_priority_trampoline(void *arg)
+{
+	SwitchThreadTrampolineArgs *args = arg;
+	ChiakiThreadFunc func = args->func;
+	void *func_arg = args->arg;
+	free(args);
+	Result prio_rc = svcSetThreadPriority(threadGetCurHandle(), CHIAKI_SWITCH_THREAD_PRIORITY);
+	printf("[THREAD PRIO] probe: svcSetThreadPriority(0x%x) rc=%#x\n", CHIAKI_SWITCH_THREAD_PRIORITY, prio_rc); fflush(stdout);
+	return func(func_arg);
+}
+
+// Diagnostic only: a thread calls this once, from within itself (handles
+// are only meaningful queried by their own owning thread), to register for
+// periodic per-thread CPU tick sampling - see switch/src/io.cpp's
+// CpuSampleThreadFunc, which reads this list every second via
+// InfoType_ThreadTickCount to find out which specific thread(s) are
+// actually driving the ~100% CPU on 3/4 cores measured during streaming,
+// after both software video decode and software AES-GCM were ruled out.
+ChiakiSwitchSampledThread chiaki_switch_sampled_threads[CHIAKI_SWITCH_MAX_SAMPLED_THREADS];
+volatile int chiaki_switch_sampled_threads_count = 0;
+
+int chiaki_switch_register_thread_for_sampling(const char *label)
+{
+	int idx = __atomic_fetch_add(&chiaki_switch_sampled_threads_count, 1, __ATOMIC_RELAXED);
+	if(idx >= CHIAKI_SWITCH_MAX_SAMPLED_THREADS)
+		return -1;
+	chiaki_switch_sampled_threads[idx].label = label;
+	chiaki_switch_sampled_threads[idx].handle = threadGetCurHandle();
+	chiaki_switch_sampled_threads[idx].self_ticks = 0;
+	return idx;
+}
+
+// InfoType_ThreadTickCount can only be queried by a thread about itself -
+// verified against a from-scratch kernel reimplementation (eden-emulator's
+// svc_info.cpp), which returns 0 with no error for any other combination.
+// A single central sampler thread cannot poll other threads' tick counts at
+// all; each monitored thread must call this about itself periodically
+// (e.g. once per work item/wakeup) so the sampler has something fresh to
+// read. info_sub_id must be UINT64_MAX for "total ticks across all cores" -
+// 0 (a real core index) only matches while that thread happens to be
+// running on core 0 at the exact instant of the call.
+void chiaki_switch_self_report_ticks(int idx)
+{
+	if(idx < 0 || idx >= CHIAKI_SWITCH_MAX_SAMPLED_THREADS)
+		return;
+	uint64_t ticks = 0;
+	svcGetInfo(&ticks, InfoType_ThreadTickCount, chiaki_switch_sampled_threads[idx].handle, UINT64_MAX);
+	chiaki_switch_sampled_threads[idx].self_ticks = ticks;
+}
+
+int64_t get_thread_limit()
+{
+	uint64_t resource_limit_handle_value = INVALID_HANDLE;
+	svcGetInfo(&resource_limit_handle_value, InfoType_ResourceLimit, INVALID_HANDLE, 0);
+	int64_t thread_cur_value = 0, thread_lim_value = 0;
+	svcGetResourceLimitCurrentValue(&thread_cur_value, resource_limit_handle_value, LimitableResource_Threads);
+	svcGetResourceLimitLimitValue(&thread_lim_value, resource_limit_handle_value, LimitableResource_Threads);
+	//printf("thread_cur_value: %lu, thread_lim_value: %lu\n", thread_cur_value, thread_lim_value);
+	// svcGetInfo(InfoType_ResourceLimit) hands back a real kernel object
+	// handle (not a pseudo-handle), same as any handle-returning svc - this
+	// runs on every chiaki_thread_create() call, and went unclosed until now.
+	svcCloseHandle(resource_limit_handle_value);
+	return thread_lim_value - thread_cur_value;
+}
+
+void chiaki_switch_log_resource_limits(const char *tag)
+{
+	uint64_t h = INVALID_HANDLE;
+	svcGetInfo(&h, InfoType_ResourceLimit, INVALID_HANDLE, 0);
+	static const struct { LimitableResource res; const char *name; } resources[] = {
+		{ LimitableResource_Threads, "Threads" },
+		{ LimitableResource_Events, "Events" },
+		{ LimitableResource_TransferMemories, "TransferMemory" },
+		{ LimitableResource_Sessions, "Sessions" },
+	};
+	printf("[RESOURCE LIMITS] %s:", tag);
+	for(size_t i = 0; i < sizeof(resources)/sizeof(resources[0]); i++)
+	{
+		int64_t cur = 0, lim = 0;
+		svcGetResourceLimitCurrentValue(&cur, h, resources[i].res);
+		svcGetResourceLimitLimitValue(&lim, h, resources[i].res);
+		printf(" %s=%lld/%lld", resources[i].name, (long long)cur, (long long)lim);
+	}
+	printf("\n");
+	fflush(stdout);
+	// Same unclosed-handle leak as get_thread_limit() above.
+	svcCloseHandle(h);
+}
+#endif
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_create(ChiakiThread *thread, ChiakiThreadFunc func, void *arg)
+{
+#if _WIN32
+	thread->func = func;
+	thread->arg = arg;
+	thread->ret = NULL;
+	thread->thread = CreateThread(NULL, 0, win32_thread_func, thread, 0, 0);
+	if(!thread->thread)
+		return CHIAKI_ERR_THREAD;
+#else
+#ifdef __SWITCH__
+	if(get_thread_limit() <= 1)
+		return CHIAKI_ERR_THREAD;
+	// pthread_create with NULL attrs uses whatever devkitA64/libnx's default
+	// stack size is, which is small enough that a thread doing real packet
+	// processing (e.g. the Takion packet-process thread introduced this
+	// session) can overflow it under real traffic - observed on-device as a
+	// clean, correct run (all packets handled, thread function returns
+	// normally) immediately followed by a silent crash inside the pthread
+	// library's own join/cleanup path, consistent with stack corruption
+	// only manifesting once the corrupted region is touched during thread
+	// teardown. Thread stacks come out of the app's own heap (a much larger,
+	// separate budget from the "bsd" sysmodule's constrained socket transfer
+	// memory), so a generous explicit size here is cheap.
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 256 * 1024);
+	SwitchThreadTrampolineArgs *trampoline_args = malloc(sizeof(SwitchThreadTrampolineArgs));
+	if(!trampoline_args)
+	{
+		pthread_attr_destroy(&attr);
+		return CHIAKI_ERR_MEMORY;
+	}
+	trampoline_args->func = func;
+	trampoline_args->arg = arg;
+	int r = pthread_create(&thread->thread, &attr, switch_thread_priority_trampoline, trampoline_args);
+	pthread_attr_destroy(&attr);
+	if(r != 0)
+	{
+		free(trampoline_args);
+		return CHIAKI_ERR_THREAD;
+	}
+#else
+	int r = pthread_create(&thread->thread, NULL, func, arg);
+	if(r != 0)
+		return CHIAKI_ERR_THREAD;
+#endif
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_join(ChiakiThread *thread, void **retval)
+{
+#if _WIN32
+	int r = WaitForSingleObject(thread->thread, INFINITE);
+	if(r != WAIT_OBJECT_0)
+		return CHIAKI_ERR_THREAD;
+	if(retval)
+		*retval = thread->ret;
+#else
+	int r = pthread_join(thread->thread, retval);
+	if(r != 0)
+		return CHIAKI_ERR_THREAD;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+//#define CHIAKI_WINDOWS_THREAD_NAME
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_set_name(ChiakiThread *thread, const char *name)
+{
+#if defined(_WIN32) && defined(CHIAKI_WINDOWS_THREAD_NAME)
+	int len = MultiByteToWideChar(CP_UTF8, 0, name, -1, NULL, 0);
+	wchar_t *wstr = calloc(sizeof(wchar_t), len+1);
+	if(!wstr)
+		return CHIAKI_ERR_MEMORY;
+	MultiByteToWideChar(CP_UTF8, 0, name, -1, wstr, len);
+	SetThreadDescription(thread->thread, wstr);
+	free(wstr);
+#else
+#ifdef __GLIBC__
+	int r = pthread_setname_np(thread->thread, name);
+	if(r != 0)
+		return CHIAKI_ERR_THREAD;
+#else
+	(void)thread;
+	(void)name;
+#endif
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_mutex_init(ChiakiMutex *mutex, bool rec)
+{
+#if _WIN32
+	InitializeCriticalSection(&mutex->cs);
+	(void)rec; // always recursive
+#else
+	pthread_mutexattr_t attr;
+	int r = pthread_mutexattr_init(&attr);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+
+	pthread_mutexattr_settype(&attr, rec ? PTHREAD_MUTEX_RECURSIVE : PTHREAD_MUTEX_DEFAULT);
+
+	r = pthread_mutex_init(&mutex->mutex, &attr);
+
+	pthread_mutexattr_destroy(&attr);
+
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_mutex_fini(ChiakiMutex *mutex)
+{
+#if _WIN32
+	DeleteCriticalSection(&mutex->cs);
+#else
+	int r = pthread_mutex_destroy(&mutex->mutex);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_mutex_lock(ChiakiMutex *mutex)
+{
+#if _WIN32
+	EnterCriticalSection(&mutex->cs);
+#else
+	int r = pthread_mutex_lock(&mutex->mutex);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_mutex_trylock(ChiakiMutex *mutex)
+{
+#if _WIN32
+	int r = TryEnterCriticalSection(&mutex->cs);
+	if(!r)
+		return CHIAKI_ERR_MUTEX_LOCKED;
+#else
+	int r = pthread_mutex_trylock(&mutex->mutex);
+	if(r == EBUSY)
+		return CHIAKI_ERR_MUTEX_LOCKED;
+	else if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_mutex_unlock(ChiakiMutex *mutex)
+{
+#if _WIN32
+	LeaveCriticalSection(&mutex->cs);
+#else
+	int r = pthread_mutex_unlock(&mutex->mutex);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_init(ChiakiCond *cond)
+{
+#if _WIN32
+	InitializeConditionVariable(&cond->cond);
+#else
+	pthread_condattr_t attr;
+	int r = pthread_condattr_init(&attr);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#if !__APPLE__
+	r = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+	if(r != 0)
+	{
+		pthread_condattr_destroy(&attr);
+		return CHIAKI_ERR_UNKNOWN;
+	}
+#endif
+	r = pthread_cond_init(&cond->cond, &attr);
+	if(r != 0)
+	{
+		pthread_condattr_destroy(&attr);
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	pthread_condattr_destroy(&attr);
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_fini(ChiakiCond *cond)
+{
+#if _WIN32
+#else
+	int r = pthread_cond_destroy(&cond->cond);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_wait(ChiakiCond *cond, ChiakiMutex *mutex)
+{
+#if _WIN32
+	int r = SleepConditionVariableCS(&cond->cond, &mutex->cs, INFINITE);
+	if(!r)
+		return CHIAKI_ERR_THREAD;
+#else
+	int r = pthread_cond_wait(&cond->cond, &mutex->mutex);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+#if !__APPLE__ && !defined(_WIN32)
+static ChiakiErrorCode chiaki_cond_timedwait_abs(ChiakiCond *cond, ChiakiMutex *mutex, struct timespec *timeout)
+{
+	int r = pthread_cond_timedwait(&cond->cond, &mutex->mutex, timeout);
+	if(r != 0)
+	{
+		if(r == ETIMEDOUT)
+			return CHIAKI_ERR_TIMEOUT;
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	return CHIAKI_ERR_SUCCESS;
+}
+
+static void set_timeout(struct timespec *timeout, uint64_t ms_from_now)
+{
+	clock_gettime(CLOCK_MONOTONIC, timeout);
+	timeout->tv_sec += ms_from_now / 1000;
+	timeout->tv_nsec += (ms_from_now % 1000) * 1000000;
+	if(timeout->tv_nsec > 1000000000)
+	{
+		timeout->tv_sec += timeout->tv_nsec / 1000000000;
+		timeout->tv_nsec %= 1000000000;
+	}
+}
+#endif
+
+#if !__APPLE__ && !__SWITCH__
+CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_timedjoin(ChiakiThread *thread, void **retval, uint64_t timeout_ms)
+{
+#if _WIN32
+	int r = WaitForSingleObject(thread->thread, timeout_ms);
+	if(r != WAIT_OBJECT_0)
+		return CHIAKI_ERR_THREAD;
+	if(retval)
+		*retval = thread->ret;
+#elif defined(__ANDROID__)
+	// Android API < 26 doesn't have pthread_clockjoin_np or pthread_timedjoin_np
+	// Fall back to blocking join - timeout parameter is ignored
+	(void)timeout_ms;
+	int r = pthread_join(thread->thread, retval);
+	if(r != 0)
+		return CHIAKI_ERR_THREAD;
+#else
+	struct timespec timeout;
+	set_timeout(&timeout, timeout_ms);
+	int r = pthread_clockjoin_np(thread->thread, retval, CLOCK_MONOTONIC, &timeout);
+	if(r != 0)
+	{
+		if(r == ETIMEDOUT)
+			return CHIAKI_ERR_TIMEOUT;
+		return CHIAKI_ERR_THREAD;
+	}
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+#endif
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_timedwait(ChiakiCond *cond, ChiakiMutex *mutex, uint64_t timeout_ms)
+{
+#if _WIN32
+	int r = SleepConditionVariableCS(&cond->cond, &mutex->cs, (DWORD)timeout_ms);
+	if(!r)
+	{
+		if(GetLastError() == ERROR_TIMEOUT)
+			return CHIAKI_ERR_TIMEOUT;
+		return CHIAKI_ERR_THREAD;
+	}
+	return CHIAKI_ERR_SUCCESS;
+#else
+	struct timespec timeout;
+#if __APPLE__
+	timeout.tv_sec = (__darwin_time_t)(timeout_ms / 1000);
+	timeout.tv_nsec = (long)((timeout_ms % 1000) * 1000000);
+	int r = pthread_cond_timedwait_relative_np(&cond->cond, &mutex->mutex, &timeout);
+	if(r != 0)
+	{
+		if(r == ETIMEDOUT)
+			return CHIAKI_ERR_TIMEOUT;
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	return CHIAKI_ERR_SUCCESS;
+#else
+	set_timeout(&timeout, timeout_ms);
+	return chiaki_cond_timedwait_abs(cond, mutex, &timeout);
+#endif
+#endif
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_wait_pred(ChiakiCond *cond, ChiakiMutex *mutex, ChiakiCheckPred check_pred, void *check_pred_user)
+{
+	while(!check_pred(check_pred_user))
+	{
+		ChiakiErrorCode err = chiaki_cond_wait(cond, mutex);
+		if(err != CHIAKI_ERR_SUCCESS)
+			return err;
+	}
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_timedwait_pred(ChiakiCond *cond, ChiakiMutex *mutex, uint64_t timeout_ms, ChiakiCheckPred check_pred, void *check_pred_user)
+{
+#if __APPLE__ || defined(_WIN32)
+	uint64_t start_time = chiaki_time_now_monotonic_ms();
+	uint64_t elapsed = 0;
+#else
+	struct timespec timeout;
+	set_timeout(&timeout, timeout_ms);
+#endif
+	while(!check_pred(check_pred_user))
+	{
+#if __APPLE__ || defined(_WIN32)
+		ChiakiErrorCode err = chiaki_cond_timedwait(cond, mutex, timeout_ms - elapsed);
+#else
+		ChiakiErrorCode err = chiaki_cond_timedwait_abs(cond, mutex, &timeout);
+#endif
+		if(err != CHIAKI_ERR_SUCCESS)
+			return err;
+#if __APPLE__ || defined(_WIN32)
+		elapsed = chiaki_time_now_monotonic_ms() - start_time;
+		if(elapsed >= timeout_ms)
+			return CHIAKI_ERR_TIMEOUT;
+#endif
+	}
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_signal(ChiakiCond *cond)
+{
+#if _WIN32
+	WakeConditionVariable(&cond->cond);
+#else
+	int r = pthread_cond_signal(&cond->cond);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_cond_broadcast(ChiakiCond *cond)
+{
+#if _WIN32
+	WakeAllConditionVariable(&cond->cond);
+#else
+	int r = pthread_cond_broadcast(&cond->cond);
+	if(r != 0)
+		return CHIAKI_ERR_UNKNOWN;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_init(ChiakiBoolPredCond *cond)
+{
+	cond->pred = false;
+
+	ChiakiErrorCode err = chiaki_mutex_init(&cond->mutex, false);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	err = chiaki_cond_init(&cond->cond);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		chiaki_mutex_fini(&cond->mutex);
+		return err;
+	}
+
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_fini(ChiakiBoolPredCond *cond)
+{
+	ChiakiErrorCode err = chiaki_cond_fini(&cond->cond);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	err = chiaki_mutex_fini(&cond->mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_lock(ChiakiBoolPredCond *cond)
+{
+	return chiaki_mutex_lock(&cond->mutex);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_unlock(ChiakiBoolPredCond *cond)
+{
+	return chiaki_mutex_unlock(&cond->mutex);
+}
+
+bool bool_pred_cond_check_pred(void *user)
+{
+	ChiakiBoolPredCond *bool_pred_cond = user;
+	return bool_pred_cond->pred;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_wait(ChiakiBoolPredCond *cond)
+{
+	return chiaki_cond_wait_pred(&cond->cond, &cond->mutex, bool_pred_cond_check_pred, cond);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_timedwait(ChiakiBoolPredCond *cond, uint64_t timeout_ms)
+{
+	return chiaki_cond_timedwait_pred(&cond->cond, &cond->mutex, timeout_ms, bool_pred_cond_check_pred, cond);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_signal(ChiakiBoolPredCond *cond)
+{
+	ChiakiErrorCode err = chiaki_bool_pred_cond_lock(cond);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	cond->pred = true;
+
+	err = chiaki_bool_pred_cond_unlock(cond);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	return chiaki_cond_signal(&cond->cond);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_bool_pred_cond_broadcast(ChiakiBoolPredCond *cond)
+{
+	ChiakiErrorCode err = chiaki_bool_pred_cond_lock(cond);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	cond->pred = true;
+
+	err = chiaki_bool_pred_cond_unlock(cond);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	return chiaki_cond_broadcast(&cond->cond);
+}
