@@ -52,11 +52,12 @@ int Host::InitSession(IO *user)
 	chiaki_connect_video_profile_preset(&(this->video_profile),
 		this->video_resolution, this->video_fps);
 	// Override the resolution preset's default bitrate if the user picked a
-	// custom one (Account tab). 0 means "use the preset's default" (10/15
-	// Mbps for 720p/1080p, set by chiaki_connect_video_profile_preset above).
-	int custom_bitrate_kbps = this->settings->GetCustomBitrateKbps();
-	if(custom_bitrate_kbps > 0)
-		this->video_profile.bitrate = custom_bitrate_kbps;
+	// custom one (Account tab, PS5 Library / PS3-PS4 Catalog Bitrate - set on
+	// this Host explicitly by whoever constructed it). 0 means "use the
+	// preset's default" (10/15 Mbps for 720p/1080p, set by
+	// chiaki_connect_video_profile_preset above).
+	if(this->custom_bitrate_kbps > 0)
+		this->video_profile.bitrate = this->custom_bitrate_kbps;
 	user->SetSharpenLevel(this->settings->GetSharpenLevel());
 	user->SetVideoPacing(this->settings->GetVideoPacingSmooth());
 	// Build chiaki ps4 stream session
@@ -281,6 +282,11 @@ void Host::SetChiakiTarget(ChiakiTarget target)
 void Host::SetHostAddr(std::string host_addr)
 {
 	this->host_addr = host_addr;
+}
+
+void Host::SetCustomBitrateKbps(int kbps)
+{
+	this->custom_bitrate_kbps = kbps;
 }
 
 void Host::SetEventConnectedCallback(std::function<void()> chiaki_event_connected_cb)

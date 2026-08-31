@@ -96,76 +96,75 @@ void MainApplication::BuildAccountMenu(brls::List *ls)
 	this->cloud_login_status = new brls::ListItem("Status");
 	ls->addView(this->cloud_login_status);
 
-	brls::ListItem *sign_in = new brls::ListItem("Sign in with PlayStation");
-	sign_in->getClickEvent()->subscribe([this](brls::View *view) {
+	this->sign_in_item = new brls::ListItem("Sign in with PlayStation");
+	this->sign_in_item->getClickEvent()->subscribe([this](brls::View *view) {
 		this->SignIn();
 	});
-	ls->addView(sign_in);
+	ls->addView(this->sign_in_item);
 
-	brls::ListItem *sign_out = new brls::ListItem("Sign out");
-	sign_out->getClickEvent()->subscribe([this](brls::View *view) {
+	this->sign_out_item = new brls::ListItem("Sign out");
+	this->sign_out_item->getClickEvent()->subscribe([this](brls::View *view) {
 		this->SignOut();
 	});
-	ls->addView(sign_out);
+	ls->addView(this->sign_out_item);
 
 	brls::Label *stream_info = new brls::Label(brls::LabelStyle::REGULAR,
 		"Stream settings", true);
 	ls->addView(stream_info);
 
-	brls::ListItem *ps5_resolution = new brls::ListItem("PS5 Library resolution");
-	ps5_resolution->setValue("1080p");
+	static const std::vector<std::string> kResolutionChoices = { "720p", "1080p" };
+
+	int ps5_resolution_index = this->settings->GetPs5LibraryResolution() == CHIAKI_VIDEO_RESOLUTION_PRESET_720p ? 0 : 1;
+	brls::SelectListItem *ps5_resolution = new brls::SelectListItem(
+		"PS5 Library Resolution", kResolutionChoices, ps5_resolution_index);
+	ps5_resolution->getValueSelectedEvent()->subscribe([this](int result) {
+		this->settings->SetPs5LibraryResolution(result == 1
+			? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+			: CHIAKI_VIDEO_RESOLUTION_PRESET_720p);
+		this->settings->WriteFile();
+	});
 	ls->addView(ps5_resolution);
 
-	brls::ListItem *ps4_resolution = new brls::ListItem("PS4 Catalog resolution");
-	ps4_resolution->setValue("720p");
-	ls->addView(ps4_resolution);
-
-	brls::ListItem *ps3_resolution = new brls::ListItem("PS3 Catalog resolution");
-	ps3_resolution->setValue("720p");
-	ls->addView(ps3_resolution);
-
-	int value = this->settings->GetHaptic(nullptr);
-	brls::SelectListItem *haptic = new brls::SelectListItem(
-		"Haptics", { "Disabled", "Weak", "Strong" }, value);
-
-	auto haptic_cb = [this](int result) {
-		HapticPreset value = HAPTIC_PRESET_DIABLED;
-		switch(result)
-		{
-			case 0:
-				value = HAPTIC_PRESET_DIABLED;
-				break;
-			case 1:
-				value = HAPTIC_PRESET_WEAK;
-				break;
-			case 2:
-				value = HAPTIC_PRESET_STRONG;
-				break;
-		}
-		this->settings->SetHaptic(nullptr, value);
+	int ps34_resolution_index = this->settings->GetPs34CatalogResolution() == CHIAKI_VIDEO_RESOLUTION_PRESET_720p ? 0 : 1;
+	brls::SelectListItem *ps34_resolution = new brls::SelectListItem(
+		"PS3/PS4 Catalog Resolution", kResolutionChoices, ps34_resolution_index);
+	ps34_resolution->getValueSelectedEvent()->subscribe([this](int result) {
+		this->settings->SetPs34CatalogResolution(result == 1
+			? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+			: CHIAKI_VIDEO_RESOLUTION_PRESET_720p);
 		this->settings->WriteFile();
-	};
-	haptic->getValueSelectedEvent()->subscribe(haptic_cb);
-	ls->addView(haptic);
+	});
+	ls->addView(ps34_resolution);
 
 	// 0 = use the resolution preset's own default bitrate (10/15 Mbps for
 	// 720p/1080p respectively, set by chiaki_connect_video_profile_preset).
 	static const int kBitrateChoicesKbps[] = { 0, 5000, 8000, 10000, 15000, 20000, 25000 };
-	int bitrate_kbps = this->settings->GetCustomBitrateKbps();
-	int bitrate_index = 0;
-	for(size_t i = 0; i < sizeof(kBitrateChoicesKbps) / sizeof(int); i++)
-		if(kBitrateChoicesKbps[i] == bitrate_kbps)
-			bitrate_index = (int)i;
+	static const std::vector<std::string> kBitrateChoiceLabels =
+		{ "Auto (resolution default)", "5 Mbps", "8 Mbps", "10 Mbps", "15 Mbps", "20 Mbps", "25 Mbps" };
 
-	brls::SelectListItem *bitrate = new brls::SelectListItem("Bitrate",
-		{ "Auto (resolution default)", "5 Mbps", "8 Mbps", "10 Mbps", "15 Mbps", "20 Mbps", "25 Mbps" },
-		bitrate_index);
-	auto bitrate_cb = [this](int result) {
-		this->settings->SetCustomBitrateKbps(kBitrateChoicesKbps[result]);
-		this->settings->WriteFile();
+	auto bitrate_index_for = [](int bitrate_kbps) {
+		int index = 0;
+		for(size_t i = 0; i < sizeof(kBitrateChoicesKbps) / sizeof(int); i++)
+			if(kBitrateChoicesKbps[i] == bitrate_kbps)
+				index = (int)i;
+		return index;
 	};
-	bitrate->getValueSelectedEvent()->subscribe(bitrate_cb);
-	ls->addView(bitrate);
+
+	brls::SelectListItem *ps5_bitrate = new brls::SelectListItem("PS5 Library Bitrate",
+		kBitrateChoiceLabels, bitrate_index_for(this->settings->GetPs5LibraryBitrateKbps()));
+	ps5_bitrate->getValueSelectedEvent()->subscribe([this](int result) {
+		this->settings->SetPs5LibraryBitrateKbps(kBitrateChoicesKbps[result]);
+		this->settings->WriteFile();
+	});
+	ls->addView(ps5_bitrate);
+
+	brls::SelectListItem *ps34_bitrate = new brls::SelectListItem("PS3/PS4 Catalog Bitrate",
+		kBitrateChoiceLabels, bitrate_index_for(this->settings->GetPs34CatalogBitrateKbps()));
+	ps34_bitrate->getValueSelectedEvent()->subscribe([this](int result) {
+		this->settings->SetPs34CatalogBitrateKbps(kBitrateChoicesKbps[result]);
+		this->settings->WriteFile();
+	});
+	ls->addView(ps34_bitrate);
 
 	brls::SelectListItem *sharpen = new brls::SelectListItem("Image sharpening",
 		{ "Off", "Low", "Medium", "High" }, this->settings->GetSharpenLevel());
@@ -194,10 +193,22 @@ void MainApplication::RefreshLoginStatus()
 	if(this->cloud_login_status == nullptr)
 		return;
 
-	if(this->settings->IsCloudLoggedIn())
-		this->cloud_login_status->setValue("Signed in");
-	else
-		this->cloud_login_status->setValue("Not signed in");
+	bool logged_in = this->settings->IsCloudLoggedIn();
+	this->cloud_login_status->setValue(logged_in ? "Signed in" : "Not signed in");
+
+	if(this->sign_in_item != nullptr && this->sign_out_item != nullptr)
+	{
+		if(logged_in)
+		{
+			this->sign_in_item->hide([]() {});
+			this->sign_out_item->show([]() {});
+		}
+		else
+		{
+			this->sign_in_item->show([]() {});
+			this->sign_out_item->hide([]() {});
+		}
+	}
 }
 
 void MainApplication::SignIn()

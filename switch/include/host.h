@@ -33,7 +33,13 @@ class Host
 		//video config
 		ChiakiVideoResolutionPreset video_resolution = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
 		ChiakiVideoFPSPreset video_fps = CHIAKI_VIDEO_FPS_PRESET_60;
-		int haptic = 0; 
+		int haptic = 0;
+		// 0 = use the resolution preset's default bitrate. Set explicitly by
+		// whoever constructs this Host (see views/cloud_game_list.cpp), which
+		// already knows whether this is a PS5 Library or PS3/PS4 Catalog
+		// stream and therefore which of the two account-level bitrate
+		// settings applies.
+		int custom_bitrate_kbps = 0;
 		std::string host_type;
 		// user info
 		std::string psn_online_id = "";
@@ -114,6 +120,7 @@ class Host
 		ChiakiTarget GetChiakiTarget();
 		void SetChiakiTarget(ChiakiTarget target);
 		void SetHostAddr(std::string host_addr);
+		void SetCustomBitrateKbps(int kbps);
 		void SetEventConnectedCallback(std::function<void()> chiaki_event_connected_cb);
 		void SetEventLoginPinRequestCallback(std::function<void(bool)> chiaki_even_login_pin_request_cb);
 		void SetEventRumbleCallback(std::function<void(uint8_t, uint8_t)> chiaki_event_rumble_cb);

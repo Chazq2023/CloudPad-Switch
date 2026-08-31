@@ -23,8 +23,10 @@ class CloudGameList : public brls::List
 		// mutating this list's own rows in place, which Borealis's
 		// BoxLayout::removeView warns isn't safe at runtime).
 		// force_refresh bypasses the on-disk catalog cache for this fetch.
+		// filter, when non-empty, only shows titles whose name contains it
+		// (case-insensitive) - see Search().
 		CloudGameList(Settings *settings, ChiakiLog *log, std::string platform,
-			brls::TabFrame *root_frame, bool force_refresh = false);
+			brls::TabFrame *root_frame, bool force_refresh = false, std::string filter = "");
 
 		// Called once by whoever calls TabFrame::addTab, with the SidebarItem
 		// that came back for this tab - needed so Refresh() can retarget it at
@@ -37,8 +39,13 @@ class CloudGameList : public brls::List
 		std::string platform;
 		brls::TabFrame *root_frame;
 		brls::SidebarItem *sidebar_item = nullptr;
+		std::string filter;
 
 		void Refresh();
+		// Opens the system keyboard (bound to the Minus button) and, on
+		// submit, swaps in a freshly-filtered replacement list the same way
+		// Refresh() does.
+		void Search();
 };
 
 #endif // CHIAKI_CLOUD_GAME_LIST_H
