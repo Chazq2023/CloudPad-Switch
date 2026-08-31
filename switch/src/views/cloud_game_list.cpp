@@ -38,12 +38,17 @@ namespace
 
 	std::string GlyphForStreamable(StreamableState state)
 	{
+		// Plain ASCII rather than Unicode check/cross marks (✓/✕) - those
+		// aren't in this app's bundled font, so they were rendering as an
+		// identical fallback/missing-glyph box for every state, making a
+		// confirmed-streamable title (Streamable) visually indistinguishable
+		// from a confirmed-failed one (NotStreamable) on-device.
 		switch(state)
 		{
 			case StreamableState::Streamable:
-				return "✓"; // check mark
+				return "OK";
 			case StreamableState::NotStreamable:
-				return "✕"; // multiplication x
+				return "X";
 			case StreamableState::Unknown:
 			default:
 				return "?";
